@@ -1,0 +1,100 @@
+# MyRS: Personal RemoteStorage Server Configuration
+# Copy this file to myrs.yml and customize for your environment
+
+# HTTP server bind address and port
+addr: ":8080"
+
+# Public hostname for discovery and CORS
+# This should be the hostname clients will use to access your server
+storageHost: "mystorage.example.com"
+
+# Auth host for OAuth endpoints
+# This is where the OAuth authorize and callback endpoints will be hosted
+# Example: "dev.put.plus" will create endpoints at:
+#   - https://dev.put.plus/oauth/authorize
+#   - https://dev.put.plus/oauth/callback
+authHost: "dev.put.plus"
+
+# Base route for mounting the server
+# Examples: "/" (default), "/remotestorage", "/api/rs"
+# The storage will be available at: storageHost + baseRoute + /{username}/{module}/{path}
+baseRoute: "/"
+
+corsOrigin: "*"
+
+oauth:
+  discoveryURL: "https://id.put.plus/.well-known/openid-configuration"
+
+  # OAuth client ID for this RemoteStorage server
+  clientID: "remotestorage-server"
+  
+  # OAuth client secret (optional)
+  # If provided, myrs will act as a confidential client and use the introspection endpoint
+  # This allows better token validation but requires registering myrs with a client secret
+  # Leave empty for public client mode (uses userinfo endpoint instead)
+  # clientSecret: "your-client-secret-here"
+  
+  # INSECURE: Ignore scopes and grant full access to any authenticated user (optional)
+  # WARNING: This is insecure and should only be used for development/testing
+  # Enable this if your OIDC provider doesn't support custom scopes (like PocketID)
+  # When enabled, any authenticated user gets full read/write access to all storage
+  # insecureIgnoreScopes: false
+
+  # Which claim to use for storage bucket identification (optional)
+  # This determines which storage bucket to use for the user's data
+  # Valid values: "sub", "user_id", "username", "preferred_username"
+  # Default: "sub"
+  subClaim: "sub"
+
+  # Which claim to use for URL username routing (optional)
+  # This determines what appears in the URL path: /{username}/module/path
+  # Valid values: "sub", "user_id", "username", "preferred_username"
+  # Default: "preferred_username"
+  usernameClaim: "preferred_username"
+
+# Static list of users for webfinger responses
+# Only users listed here will have webfinger responses served
+webfingerUsers:
+  - username: "alice"
+    # Optional: specify the exact sub (subject ID) that must match
+    # If provided, authentication will require both username AND sub to match
+    # sub: "550e8400-e29b-41d4-a716-446655440000"
+  - username: "bob"
+    sub: "550e8400-e29b-41d4-a716-446655440001"  # This user requires exact sub match
+  - username: "carol"
+    # No sub specified - only username needs to match
+
+# Example OIDC providers and their discovery URLs:
+#
+# Keycloak:
+#   discoveryURL: "https://keycloak.example.com/realms/myrealm/.well-known/openid-configuration"
+#
+# Auth0:
+#   discoveryURL: "https://yourdomain.auth0.com/.well-known/openid-configuration"
+#
+# Put.plus:
+#   discoveryURL: "https://id.put.plus/.well-known/openid-configuration"
+#
+# Google:
+#   discoveryURL: "https://accounts.google.com/.well-known/openid-configuration"
+#
+# Note: The server automatically fetches authorization, token, and introspection endpoints
+# from the OIDC discovery document. This ensures compatibility with standard OIDC providers.
+
+# OAuth Flow:
+# MyRS provides OAuth endpoints on the authHost that integrate with your OIDC provider:
+#   1. Client app discovers OAuth endpoint via webfinger
+#   2. Client redirects to: https://dev.put.plus/oauth/authorize?redirect_uri=...&scope=...
+#   3. MyRS constructs proper OIDC authorization URL and redirects to your OIDC provider
+#   4. After authorization, the OIDC provider redirects to https://dev.put.plus/oauth/callback
+#   5. The callback endpoint then redirects back to the client with an access token
+#
+# This approach ensures proper client_id handling and simplifies the OAuth flow for RemoteStorage apps.
+
+# Webfinger Examples:
+# Once configured, the following webfinger queries will work:
+#   https://localhost/.well-known/webfinger?resource=alice
+#   https://localhost/.well-known/webfinger?resource=acct:alice@localhost
+#   https://localhost/.well-known/webfinger?resource=bob
+#
+# These will return RemoteStorage discovery information for the configured users.
