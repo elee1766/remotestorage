@@ -25,19 +25,19 @@ type WebfingerUser struct {
 
 // OidcBasedImplementation implements ServerImplementation with /{username}/{path} routing
 type OidcBasedImplementation struct {
-	mu                  sync.RWMutex
-	storages            map[string]*rsstorage.BucketStorage
-	authURL             string
-	tokenInfoURL        string
-	introspectionURL    string // Introspection endpoint URL
-	clientID            string
-	clientSecret        string // Client secret for introspection
-	subClaim            string // Claim for storage bucket ID (default: "sub")
-	usernameClaim       string // Claim for URL username (default: "preferred_username")
-	httpClient          *http.Client
-	webfingerUsers      []WebfingerUser // Optional list of users with sub validation
-	useIntrospection    bool    // Whether to use introspection (when client secret is available)
-	insecureIgnoreScopes bool    // INSECURE: Ignore scopes and grant full access
+	mu                   sync.RWMutex
+	storages             map[string]*rsstorage.BucketStorage
+	authURL              string
+	tokenInfoURL         string
+	introspectionURL     string // Introspection endpoint URL
+	clientID             string
+	clientSecret         string // Client secret for introspection
+	subClaim             string // Claim for storage bucket ID (default: "sub")
+	usernameClaim        string // Claim for URL username (default: "preferred_username")
+	httpClient           *http.Client
+	webfingerUsers       []WebfingerUser // Optional list of users with sub validation
+	useIntrospection     bool            // Whether to use introspection (when client secret is available)
+	insecureIgnoreScopes bool            // INSECURE: Ignore scopes and grant full access
 }
 
 // NewOidcBasedImplementationWithOAuth creates a new OIDC-based server implementation with external OAuth
@@ -73,8 +73,8 @@ func (p *OidcBasedImplementation) SetInsecureIgnoreScopes(ignore bool) {
 	}
 }
 
-// GetAuth validates authentication and returns scopes
-func (p *OidcBasedImplementation) GetAuth(r *http.Request) ([]rs.Scope, error) {
+// GetAuth validates authentication and returns auth info
+func (p *OidcBasedImplementation) GetAuth(r *http.Request) (*rsserver.AuthInfo, error) {
 	// Extract username from path for validation
 	path := strings.TrimPrefix(r.URL.Path, "/")
 	parts := strings.SplitN(path, "/", 3)
@@ -95,6 +95,7 @@ func (p *OidcBasedImplementation) GetAuth(r *http.Request) ([]rs.Scope, error) {
 	// Validate token and get auth info
 	storageID, requestNickname, scopes, err := p.validateTokenForStorage(r.Context(), token)
 	if err != nil {
+		log.Printf("Error validating token: %v", err)
 		return nil, rsserver.NewHTTPError(http.StatusUnauthorized, "Invalid token")
 	}
 
@@ -127,7 +128,12 @@ func (p *OidcBasedImplementation) GetAuth(r *http.Request) ([]rs.Scope, error) {
 		return nil, rsserver.NewHTTPError(http.StatusForbidden, "Insufficient scope")
 	}
 
-	return scopes, nil
+	return &rsserver.AuthInfo{
+		UserID:          storageID,
+		Username:        requestNickname,
+		Scopes:          scopes,
+		IsAuthenticated: true,
+	}, nil
 }
 
 // GetStorage returns storage backend and routing info for the request
@@ -139,7 +145,6 @@ func (p *OidcBasedImplementation) GetStorage(r *http.Request) (*rsserver.Storage
 		return nil, rsserver.NewHTTPError(http.StatusBadRequest, "Invalid path: must be /{username}/{module}/{file}")
 	}
 
-	nickname := parts[0]
 	module := parts[1]
 	var filePath string
 	if len(parts) > 2 {
@@ -148,51 +153,21 @@ func (p *OidcBasedImplementation) GetStorage(r *http.Request) (*rsserver.Storage
 		filePath = "/"
 	}
 
-	authHeader := r.Header.Get("Authorization")
-	if !strings.HasPrefix(authHeader, "Bearer ") {
-		return nil, rsserver.NewHTTPError(http.StatusUnauthorized, "Missing or invalid authorization header")
-	}
-	token := strings.TrimPrefix(authHeader, "Bearer ")
-
-	storageID, username, _, err := p.validateTokenForStorage(r.Context(), token)
-	if err != nil {
-		return nil, rsserver.NewHTTPError(http.StatusUnauthorized, "Invalid token")
-	}
-
-	if nickname != username {
-		return nil, rsserver.NewHTTPError(http.StatusForbidden, "Access denied: username mismatch")
+	// Get auth info from context (should have been set by GetAuth)
+	authInfo, ok := rsserver.AuthInfoFromContext(r.Context())
+	if !ok || !authInfo.IsAuthenticated {
+		// For public paths, we might not have auth - that's okay
+		// Use a default storage identifier
+		storage := p.getStorageForUser("public", module)
+		return &rsserver.StorageResult{
+			Storage: storage,
+			Module:  module,
+			Path:    filePath,
+		}, nil
 	}
 
-	// Get storage for this user and module
-	storage := p.getStorageForUser(storageID, module)
-
-	return &rsserver.StorageResult{
-		Storage: storage,
-		Module:  module,
-		Path:    filePath,
-	}, nil
-}
-
-// getStorageForPublicAccess creates storage access for public requests
-func (p *OidcBasedImplementation) getStorageForPublicAccess(r *http.Request) (*rsserver.StorageResult, error) {
-	// Extract the path parts to determine storage
-	publicPrefix := "/" + rs.PublicModule + "/"
-	path := strings.TrimPrefix(r.URL.Path, publicPrefix)
-	parts := strings.SplitN(path, "/", 2)
-	if len(parts) < 1 || parts[0] == "" {
-		return nil, rsserver.NewHTTPError(http.StatusBadRequest, "Invalid public path")
-	}
-
-	// For public access, we'll use a special public storage bucket
-	module := parts[0]
-	var filePath string
-	if len(parts) > 1 {
-		filePath = "/" + parts[1]
-	} else {
-		filePath = "/"
-	}
-
-	storage := p.getStorageForUser(rs.PublicModule, module)
+	// Get storage for this authenticated user and module
+	storage := p.getStorageForUser(authInfo.UserID, module)
 
 	return &rsserver.StorageResult{
 		Storage: storage,
@@ -221,31 +196,31 @@ func (p *OidcBasedImplementation) getStorageForUser(storageID, module string) rs
 // TokenInfoResponse represents the response from the OAuth token info endpoint
 type TokenInfoResponse struct {
 	// Introspection fields
-	Active            bool     `json:"active"`
-	
+	Active bool `json:"active"`
+
 	// Common OIDC userinfo fields
-	Sub               string   `json:"sub"`                // Subject (user ID)
-	Name              string   `json:"name"`               // Full name
-	GivenName         string   `json:"given_name"`         // First name
-	FamilyName        string   `json:"family_name"`        // Last name
-	PreferredUsername string   `json:"preferred_username"` // OIDC standard preferred username
-	Email             string   `json:"email"`              // Email address
-	EmailVerified     bool     `json:"email_verified"`     // Email verification status
-	
+	Sub               string `json:"sub"`                // Subject (user ID)
+	Name              string `json:"name"`               // Full name
+	GivenName         string `json:"given_name"`         // First name
+	FamilyName        string `json:"family_name"`        // Last name
+	PreferredUsername string `json:"preferred_username"` // OIDC standard preferred username
+	Email             string `json:"email"`              // Email address
+	EmailVerified     bool   `json:"email_verified"`     // Email verification status
+
 	// Alternative username fields
-	UserID            string   `json:"user_id"`            // Alternative field for user ID
-	Username          string   `json:"username"`           // Another alternative
-	Nickname          string   `json:"nickname"`           // Nickname field
-	
+	UserID   string `json:"user_id"`  // Alternative field for user ID
+	Username string `json:"username"` // Another alternative
+	Nickname string `json:"nickname"` // Nickname field
+
 	// Scope fields
-	Scope             string   `json:"scope"`              // Space-separated scopes
-	Scopes            []string `json:"scopes"`             // Array of scopes (alternative)
-	
+	Scope  string   `json:"scope"`  // Space-separated scopes
+	Scopes []string `json:"scopes"` // Array of scopes (alternative)
+
 	// Other potential fields
-	Aud               any      `json:"aud"`                // Audience
-	Iss               string   `json:"iss"`                // Issuer
-	Iat               int64    `json:"iat"`                // Issued at
-	Exp               int64    `json:"exp"`                // Expiration time
+	Aud any    `json:"aud"` // Audience
+	Iss string `json:"iss"` // Issuer
+	Iat int64  `json:"iat"` // Issued at
+	Exp int64  `json:"exp"` // Expiration time
 }
 
 // JWTClaims represents the claims in a JWT token
@@ -266,47 +241,47 @@ func decodeJWT(token string) (*JWTClaims, error) {
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("invalid JWT format")
 	}
-	
+
 	// Decode the claims (second part)
 	claimsData, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode JWT claims: %w", err)
 	}
-	
+
 	// First log the raw claims to see everything
 	var rawClaims map[string]interface{}
 	if err := json.Unmarshal(claimsData, &rawClaims); err != nil {
 		return nil, fmt.Errorf("failed to parse raw JWT claims: %w", err)
 	}
 	log.Printf("Raw JWT claims: %+v", rawClaims)
-	
+
 	// Pretty print the claims for better debugging
 	prettyJSON, _ := json.MarshalIndent(rawClaims, "", "  ")
 	log.Printf("JWT claims (formatted):\n%s", string(prettyJSON))
-	
+
 	var claims JWTClaims
 	if err := json.Unmarshal(claimsData, &claims); err != nil {
 		return nil, fmt.Errorf("failed to parse JWT claims: %w", err)
 	}
-	
+
 	return &claims, nil
 }
 
 // validateTokenForStorage validates a token and returns storage ID, username, and scopes
 func (p *OidcBasedImplementation) validateTokenForStorage(ctx context.Context, token string) (storageID, nickname string, scopes []rs.Scope, err error) {
 	var req *http.Request
-	
+
 	if p.useIntrospection {
 		// Use introspection endpoint with client credentials
 		formData := url.Values{}
 		formData.Set("token", token)
-		
+
 		req, err = http.NewRequestWithContext(ctx, "POST", p.introspectionURL, strings.NewReader(formData.Encode()))
 		if err != nil {
 			return "", "", nil, fmt.Errorf("failed to create introspection request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		
+
 		// Use HTTP Basic Authentication for client credentials
 		req.SetBasicAuth(p.clientID, p.clientSecret)
 	} else {
@@ -367,14 +342,14 @@ func (p *OidcBasedImplementation) validateTokenForStorage(ctx context.Context, t
 	if p.useIntrospection && !tokenInfo.Active {
 		return "", "", nil, fmt.Errorf("token is not active")
 	}
-	
+
 	// Try to decode the JWT to get additional claims, especially scopes
 	jwtClaims, err := decodeJWT(token)
 	if err != nil {
 		log.Printf("Failed to decode JWT (this is OK if not a JWT): %v", err)
 	} else {
 		log.Printf("Successfully decoded JWT claims: %+v", jwtClaims)
-		
+
 		// If we got scopes from the JWT, use them
 		if jwtClaims.Scope != "" && tokenInfo.Scope == "" {
 			tokenInfo.Scope = jwtClaims.Scope
@@ -384,7 +359,7 @@ func (p *OidcBasedImplementation) validateTokenForStorage(ctx context.Context, t
 			tokenInfo.Scopes = jwtClaims.Scopes
 			log.Printf("Using scopes array from JWT: %v", jwtClaims.Scopes)
 		}
-		
+
 		// Also fill in any missing user info from JWT
 		if tokenInfo.Sub == "" && jwtClaims.Sub != "" {
 			tokenInfo.Sub = jwtClaims.Sub
@@ -461,7 +436,7 @@ func (p *OidcBasedImplementation) validateTokenForStorage(ctx context.Context, t
 	} else if tokenInfo.Scope != "" {
 		scopeStrings = strings.Split(tokenInfo.Scope, " ")
 	}
-	
+
 	log.Printf("Raw scopes from token info: %v", scopeStrings)
 
 	// Convert to RemoteStorage scopes
@@ -472,7 +447,7 @@ func (p *OidcBasedImplementation) validateTokenForStorage(ctx context.Context, t
 			log.Printf("Skipping OIDC scope: %s", scopeStr)
 			continue
 		}
-		
+
 		// RemoteStorage scopes are in format "module:access" (e.g., "documents:rw")
 		parts := strings.SplitN(scopeStr, ":", 2)
 		if len(parts) != 2 {
@@ -496,7 +471,7 @@ func (p *OidcBasedImplementation) validateTokenForStorage(ctx context.Context, t
 		})
 		log.Printf("Added RemoteStorage scope: %s:%s", parts[0], parts[1])
 	}
-	
+
 	// If no RemoteStorage scopes were found, check if we should ignore scopes
 	if len(rsScopes) == 0 {
 		if p.insecureIgnoreScopes {

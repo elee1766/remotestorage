@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"golang.org/x/oauth2"
 	"anime.bike/remotestorage/pkg/rs"
+	"golang.org/x/oauth2"
 )
 
 // Client is a RemoteStorage client
@@ -42,12 +42,11 @@ func (c *Client) Get(path string) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if err := c.setAuth(req); err != nil {
 		return nil, err
 	}
-	
-	
+
 	return c.HTTPClient.Do(req)
 }
 
@@ -57,19 +56,19 @@ func (c *Client) Put(path string, body io.Reader, contentType string, etag strin
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if err := c.setAuth(req); err != nil {
 		return nil, err
 	}
-	
+
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	
+
 	if etag != "" {
 		req.Header.Set("If-Match", etag)
 	}
-	
+
 	return c.HTTPClient.Do(req)
 }
 
@@ -79,15 +78,15 @@ func (c *Client) Delete(path string, etag string) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if err := c.setAuth(req); err != nil {
 		return nil, err
 	}
-	
+
 	if etag != "" {
 		req.Header.Set("If-Match", etag)
 	}
-	
+
 	return c.HTTPClient.Do(req)
 }
 
@@ -97,11 +96,11 @@ func (c *Client) Head(path string) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if err := c.setAuth(req); err != nil {
 		return nil, err
 	}
-	
+
 	return c.HTTPClient.Do(req)
 }
 
@@ -109,12 +108,12 @@ func (c *Client) setAuth(req *http.Request) error {
 	if c.TokenSource == nil {
 		return nil
 	}
-	
+
 	token, err := c.TokenSource.Token()
 	if err != nil {
 		return err
 	}
-	
+
 	token.SetAuthHeader(req)
 	return nil
 }
@@ -125,19 +124,19 @@ func ParseFolderListing(resp *http.Response, path string) (*rs.FolderListing, er
 	if !strings.HasPrefix(contentType, "application/ld+json") && !strings.HasPrefix(contentType, "application/json") {
 		return nil, fmt.Errorf("expected application/ld+json or application/json, got %s", contentType)
 	}
-	
+
 	var listing rs.FolderListing
 	err := json.NewDecoder(resp.Body).Decode(&listing)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Extract folder name from path
 	name := path
 	if idx := strings.LastIndex(path, "/"); idx >= 0 {
 		name = path[idx+1:]
 	}
-	
+
 	// Set metadata
 	listing.Metadata = rs.Metadata{
 		Path:     path,
@@ -145,6 +144,6 @@ func ParseFolderListing(resp *http.Response, path string) (*rs.FolderListing, er
 		ETag:     resp.Header.Get("ETag"),
 		IsFolder: true,
 	}
-	
+
 	return &listing, nil
 }

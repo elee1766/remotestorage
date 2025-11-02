@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"anime.bike/remotestorage/pkg/rs"
 )
@@ -55,6 +56,21 @@ func NewHTTPError(statusCode int, message string) *HTTPError {
 	}
 }
 
+// AuthInfo contains authentication and user information
+type AuthInfo struct {
+	// UserID is the unique identifier for the user (e.g., sub claim)
+	UserID string
+
+	// Username is the human-readable username (e.g., preferred_username)
+	Username string
+
+	// Scopes are the access scopes granted to this request
+	Scopes []rs.Scope
+
+	// IsAuthenticated indicates if the request has valid authentication
+	IsAuthenticated bool
+}
+
 // StorageResult contains the storage backend and routing information
 type StorageResult struct {
 	// Storage backend to use for this request
@@ -69,11 +85,13 @@ type StorageResult struct {
 
 // ServerImplementation handles authentication and storage routing
 type ServerImplementation interface {
-	// GetAuth validates authentication and returns scopes
-	// Returns 401 error if authentication fails
-	GetAuth(r *http.Request) ([]rs.Scope, error)
+	// GetAuth validates authentication and returns auth info
+	// For public paths, this may return unauthenticated AuthInfo
+	// Returns 401 error if authentication is required but fails
+	GetAuth(r *http.Request) (*AuthInfo, error)
 
 	// GetStorage returns storage backend and routing info for the request
+	// The request context should contain AuthInfo from GetAuth
 	GetStorage(r *http.Request) (*StorageResult, error)
 }
 
@@ -105,14 +123,8 @@ func (s *StorageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *StorageHandler) handleGet(w http.ResponseWriter, r *http.Request) {
-	// Handle OPTIONS requests that don't need storage
-	if r.Method == "OPTIONS" {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
-	// Get authentication
-	_, err := s.Implementation.GetAuth(r)
+	// Authenticate and get storage (handles public paths automatically)
+	authInfo, storageResult, err := s.authenticateAndGetStorage(r)
 	if err != nil {
 		if httpErr, ok := err.(*HTTPError); ok {
 			http.Error(w, httpErr.Message, httpErr.StatusCode)
@@ -122,28 +134,27 @@ func (s *StorageHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get storage
-	storageResult, err := s.Implementation.GetStorage(r)
-	if err != nil {
-		if httpErr, ok := err.(*HTTPError); ok {
-			http.Error(w, httpErr.Message, httpErr.StatusCode)
-		} else {
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-		}
-		return
-	}
+	// Store auth info in context for potential use by backend
+	ctx := WithAuthInfo(r.Context(), authInfo)
 
 	storage := storageResult.Storage
 	path := storageResult.Path
-	doc, listing, err := storage.Get(r.Context(), path)
+	doc, listing, err := storage.Get(ctx, path)
 	if err != nil {
 		http.Error(w, "Not found", http.StatusNotFound)
 		return
 	}
 
 	if listing != nil {
+		// Check If-None-Match for folder
+		if checkIfNoneMatch(r, listing.Metadata.ETag) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+
 		// Return folder listing as JSON-LD
 		w.Header().Set("Content-Type", "application/ld+json")
+		w.Header().Set("Cache-Control", "no-cache")
 		if listing.Metadata.ETag != "" {
 			w.Header().Set("ETag", listing.Metadata.ETag)
 		}
@@ -158,7 +169,14 @@ func (s *StorageHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if doc != nil {
+		// Check If-None-Match for document
+		if checkIfNoneMatch(r, doc.Metadata.ETag) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+
 		// Return document
+		w.Header().Set("Cache-Control", "no-cache")
 		if doc.Metadata.ContentType != "" {
 			w.Header().Set("Content-Type", doc.Metadata.ContentType)
 		}
@@ -183,8 +201,8 @@ func (s *StorageHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *StorageHandler) handlePut(w http.ResponseWriter, r *http.Request) {
-	// Get authentication
-	_, err := s.Implementation.GetAuth(r)
+	// Authenticate and get storage
+	authInfo, storageResult, err := s.authenticateAndGetStorage(r)
 	if err != nil {
 		if httpErr, ok := err.(*HTTPError); ok {
 			http.Error(w, httpErr.Message, httpErr.StatusCode)
@@ -194,16 +212,8 @@ func (s *StorageHandler) handlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get storage
-	storageResult, err := s.Implementation.GetStorage(r)
-	if err != nil {
-		if httpErr, ok := err.(*HTTPError); ok {
-			http.Error(w, httpErr.Message, httpErr.StatusCode)
-		} else {
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-		}
-		return
-	}
+	// Store auth info in context
+	ctx := WithAuthInfo(r.Context(), authInfo)
 
 	storage := storageResult.Storage
 	path := storageResult.Path
@@ -215,7 +225,7 @@ func (s *StorageHandler) handlePut(w http.ResponseWriter, r *http.Request) {
 
 	// If-None-Match: * means create only if doesn't exist
 	if ifNoneMatch == "*" {
-		etag, err = storage.Create(r.Context(), path, r.Body, contentType)
+		etag, err = storage.Create(ctx, path, r.Body, contentType)
 		if err != nil {
 			if errors.Is(err, rs.ErrAlreadyExists) {
 				http.Error(w, "Precondition Failed", http.StatusPreconditionFailed)
@@ -231,7 +241,7 @@ func (s *StorageHandler) handlePut(w http.ResponseWriter, r *http.Request) {
 
 	// If-Match header means update existing
 	if ifMatch != "" {
-		etag, err = storage.Update(r.Context(), path, r.Body, contentType, ifMatch)
+		etag, err = storage.Update(ctx, path, r.Body, contentType, ifMatch)
 		if err != nil {
 			if errors.Is(err, rs.ErrNotFound) {
 				http.Error(w, "Not found", http.StatusNotFound)
@@ -248,7 +258,7 @@ func (s *StorageHandler) handlePut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// No precondition - try create first, then update
-	etag, err = storage.Create(r.Context(), path, r.Body, contentType)
+	etag, err = storage.Create(ctx, path, r.Body, contentType)
 	if err == nil {
 		w.Header().Set("ETag", etag)
 		w.WriteHeader(http.StatusCreated)
@@ -256,7 +266,7 @@ func (s *StorageHandler) handlePut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Document exists, do update without etag check
-	etag, err = storage.Update(r.Context(), path, r.Body, contentType, "")
+	etag, err = storage.Update(ctx, path, r.Body, contentType, "")
 	if err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
@@ -267,8 +277,8 @@ func (s *StorageHandler) handlePut(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *StorageHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
-	// Get authentication
-	_, err := s.Implementation.GetAuth(r)
+	// Authenticate and get storage
+	authInfo, storageResult, err := s.authenticateAndGetStorage(r)
 	if err != nil {
 		if httpErr, ok := err.(*HTTPError); ok {
 			http.Error(w, httpErr.Message, httpErr.StatusCode)
@@ -278,22 +288,14 @@ func (s *StorageHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get storage
-	storageResult, err := s.Implementation.GetStorage(r)
-	if err != nil {
-		if httpErr, ok := err.(*HTTPError); ok {
-			http.Error(w, httpErr.Message, httpErr.StatusCode)
-		} else {
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-		}
-		return
-	}
+	// Store auth info in context
+	ctx := WithAuthInfo(r.Context(), authInfo)
 
 	storage := storageResult.Storage
 	path := storageResult.Path
 	ifMatch := r.Header.Get("If-Match")
 
-	err = storage.Delete(r.Context(), path, ifMatch)
+	err = storage.Delete(ctx, path, ifMatch)
 	if err != nil {
 		http.Error(w, "Not found", http.StatusNotFound)
 		return
@@ -303,8 +305,8 @@ func (s *StorageHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *StorageHandler) handleHead(w http.ResponseWriter, r *http.Request) {
-	// Get authentication
-	_, err := s.Implementation.GetAuth(r)
+	// Authenticate and get storage (handles public paths automatically)
+	authInfo, storageResult, err := s.authenticateAndGetStorage(r)
 	if err != nil {
 		if httpErr, ok := err.(*HTTPError); ok {
 			http.Error(w, httpErr.Message, httpErr.StatusCode)
@@ -314,20 +316,12 @@ func (s *StorageHandler) handleHead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get storage
-	storageResult, err := s.Implementation.GetStorage(r)
-	if err != nil {
-		if httpErr, ok := err.(*HTTPError); ok {
-			http.Error(w, httpErr.Message, httpErr.StatusCode)
-		} else {
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-		}
-		return
-	}
+	// Store auth info in context
+	ctx := WithAuthInfo(r.Context(), authInfo)
 
 	storage := storageResult.Storage
 	path := storageResult.Path
-	metadata, err := storage.Head(r.Context(), path)
+	metadata, err := storage.Head(ctx, path)
 	if err != nil {
 		http.Error(w, "Not found", http.StatusNotFound)
 		return
@@ -347,4 +341,90 @@ func (s *StorageHandler) handleHead(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// Helper functions
+
+// isPublicDocument checks if a path points to a public document (not a folder)
+// Per spec section 9: "GET and HEAD requests to a document (but not a folder)
+// whose path starts with '/public/' are always allowed"
+func isPublicDocument(path string) bool {
+	// Must start with "public/" after leading slash is trimmed
+	if !strings.HasPrefix(path, "public/") {
+		return false
+	}
+
+	// Must not end with "/" (which would indicate a folder)
+	return !strings.HasSuffix(path, "/")
+}
+
+// checkIfNoneMatch checks if the If-None-Match header matches the given ETag
+// Returns true if the header exists and matches, indicating a 304 should be returned
+func checkIfNoneMatch(r *http.Request, currentETag string) bool {
+	ifNoneMatch := r.Header.Get("If-None-Match")
+	if ifNoneMatch == "" || currentETag == "" {
+		return false
+	}
+
+	// Parse comma-separated list of ETags
+	etags := strings.Split(ifNoneMatch, ",")
+	for _, etag := range etags {
+		if strings.TrimSpace(etag) == currentETag {
+			return true
+		}
+	}
+
+	return false
+}
+
+// authenticateAndGetStorage handles authentication and storage retrieval with context caching
+// This implements spec-compliant public path handling and avoids duplicate token validation
+func (s *StorageHandler) authenticateAndGetStorage(r *http.Request) (*AuthInfo, *StorageResult, error) {
+	// Check if auth info is already in context (from a previous call in the same request)
+	if authInfo, ok := AuthInfoFromContext(r.Context()); ok {
+		// Get storage with the cached auth
+		storageResult, err := s.Implementation.GetStorage(r)
+		return authInfo, storageResult, err
+	}
+
+	// Check if this is a public document path that doesn't require auth
+	path := strings.TrimPrefix(r.URL.Path, "/")
+	isPublic := isPublicDocument(path)
+	isReadOnly := r.Method == "GET" || r.Method == "HEAD"
+
+	// Per spec: "GET and HEAD requests to a document whose path starts with '/public/'
+	// are always allowed. They, as well as OPTIONS requests, can be made without a bearer token."
+	if isPublic && isReadOnly {
+		// Try to authenticate, but don't fail if there's no auth
+		authInfo, err := s.Implementation.GetAuth(r)
+		if err != nil {
+			// No authentication provided - that's okay for public documents
+			authInfo = &AuthInfo{
+				IsAuthenticated: false,
+				Scopes:         []rs.Scope{},
+			}
+		}
+
+		// Store in context for future use
+		ctx := WithAuthInfo(r.Context(), authInfo)
+		r = r.WithContext(ctx)
+
+		// Get storage
+		storageResult, err := s.Implementation.GetStorage(r)
+		return authInfo, storageResult, err
+	}
+
+	// All other requests require authentication
+	authInfo, err := s.Implementation.GetAuth(r)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Store in context for future use
+	ctx := WithAuthInfo(r.Context(), authInfo)
+	r = r.WithContext(ctx)
+
+	// Get storage
+	storageResult, err := s.Implementation.GetStorage(r)
+	return authInfo, storageResult, err
 }

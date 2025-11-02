@@ -19,6 +19,7 @@ import (
 
 	"anime.bike/remotestorage/cmd/myrs/impl"
 	"anime.bike/remotestorage/pkg/nullable"
+	"anime.bike/remotestorage/pkg/oauth"
 	"anime.bike/remotestorage/pkg/rs"
 	"anime.bike/remotestorage/pkg/rsserver"
 	"anime.bike/remotestorage/pkg/webfinger"
@@ -31,6 +32,21 @@ type OAuthConfig struct {
 	SubClaim           string `yaml:"subClaim"`           // Claim for storage bucket ID (default: "sub")
 	UsernameClaim      string `yaml:"usernameClaim"`      // Claim for URL username (default: "preferred_username")
 	InsecureIgnoreScopes bool `yaml:"insecureIgnoreScopes"` // INSECURE: Ignore scopes and grant full access to authenticated users
+	
+	// Internal OAuth provider configuration (optional)
+	Internal *InternalOAuthConfig `yaml:"internal"`
+}
+
+type InternalOAuthConfig struct {
+	Enabled      bool     `yaml:"enabled"`
+	JWTSecret    string   `yaml:"jwtSecret"`
+	Upstream     UpstreamConfig `yaml:"upstream"`
+}
+
+type UpstreamConfig struct {
+	DiscoveryURL string `yaml:"discoveryURL"`
+	ClientID     string `yaml:"clientID"`
+	ClientSecret string `yaml:"clientSecret"`
 }
 
 type WebfingerUser struct {
@@ -142,6 +158,45 @@ func fetchOIDCDiscovery(discoveryURL string) (*OIDCDiscoveryResponse, error) {
 	}
 
 	return &discovery, nil
+}
+
+// setupInternalOAuth sets up the internal OAuth provider
+func setupInternalOAuth(config Config, mux *http.ServeMux) (*oauth.Provider, error) {
+	// Build user mappings from webfinger users
+	userMappings := make([]oauth.UserMapping, len(config.WebfingerUsers))
+	for i, user := range config.WebfingerUsers {
+		userMappings[i] = oauth.UserMapping{
+			Username: user.Username,
+			Sub:      user.Sub,
+		}
+	}
+	
+	// Create the OAuth provider
+	publicURL := fmt.Sprintf("https://%s", config.AuthHost)
+	provider, err := oauth.NewProvider(oauth.Config{
+		PublicURL: publicURL,
+		JWTSecret: config.OAuth.Internal.JWTSecret,
+		UpstreamClient: &oauth.UpstreamClient{
+			DiscoveryURL: config.OAuth.Internal.Upstream.DiscoveryURL,
+			ClientID:     config.OAuth.Internal.Upstream.ClientID,
+			ClientSecret: config.OAuth.Internal.Upstream.ClientSecret,
+		},
+		UserMappings: userMappings,
+	})
+	if err != nil {
+		return nil, err
+	}
+	
+	// Register OAuth endpoints
+	provider.RegisterHandlers(mux, "/oauth")
+	
+	// Add discovery endpoint
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(provider.GetDiscovery("/oauth"))
+	})
+	
+	return provider, nil
 }
 
 // setupWebfingerEndpoints adds webfinger endpoints for configured users
@@ -583,29 +638,56 @@ func main() {
 		config.OAuth.UsernameClaim = "preferred_username"
 	}
 
-	// Fetch OIDC discovery document
-	discovery, err := fetchOIDCDiscovery(config.OAuth.DiscoveryURL)
-	if err != nil {
-		log.Fatalf("Failed to fetch OIDC discovery: %v", err)
-	}
+	// Setup complete RemoteStorage server
+	mux := http.NewServeMux()
 
-	// Determine which endpoint to use based on client configuration
+	// Initialize OAuth endpoints
 	var tokenInfoURL string
 	var introspectionURL string
-	
-	if config.OAuth.ClientSecret != "" && discovery.IntrospectionEndpoint != "" {
-		// Confidential client - use introspection
-		introspectionURL = discovery.IntrospectionEndpoint
-		tokenInfoURL = discovery.UserinfoEndpoint // Keep as fallback
-		log.Printf("Using introspection endpoint: %s", introspectionURL)
-	} else {
-		// Public client - use userinfo only
-		tokenInfoURL = discovery.UserinfoEndpoint
-		log.Printf("Using userinfo endpoint: %s", tokenInfoURL)
-	}
+	var authEndpoint string
+	var oauthProvider *oauth.Provider
 
-	// Use authorization endpoint from discovery
-	authEndpoint := discovery.AuthorizationEndpoint
+	// Check if internal OAuth is enabled first
+	if config.OAuth.Internal != nil && config.OAuth.Internal.Enabled {
+		// Set up internal OAuth provider
+		log.Printf("Setting up internal OAuth provider")
+		
+		var err error
+		oauthProvider, err = setupInternalOAuth(config, mux)
+		if err != nil {
+			log.Fatalf("Failed to setup internal OAuth provider: %v", err)
+		}
+		
+		// Use internal OAuth endpoints
+		authEndpoint = fmt.Sprintf("https://%s/oauth/authorize", config.AuthHost)
+		tokenInfoURL = fmt.Sprintf("https://%s/oauth/introspect", config.AuthHost)
+		introspectionURL = tokenInfoURL
+		
+		log.Printf("Internal OAuth provider configured")
+		log.Printf("  Auth endpoint: %s", authEndpoint)
+		log.Printf("  Introspection endpoint: %s", introspectionURL)
+	} else {
+		// Fetch OIDC discovery document for external provider
+		discovery, err := fetchOIDCDiscovery(config.OAuth.DiscoveryURL)
+		if err != nil {
+			log.Fatalf("Failed to fetch OIDC discovery: %v", err)
+		}
+
+		// Determine which endpoint to use based on client configuration
+		if config.OAuth.ClientSecret != "" && discovery.IntrospectionEndpoint != "" {
+			// Confidential client - use introspection
+			introspectionURL = discovery.IntrospectionEndpoint
+			tokenInfoURL = discovery.UserinfoEndpoint // Keep as fallback
+			log.Printf("Using introspection endpoint: %s", introspectionURL)
+		} else {
+			// Public client - use userinfo only
+			tokenInfoURL = discovery.UserinfoEndpoint
+			log.Printf("Using userinfo endpoint: %s", tokenInfoURL)
+		}
+
+		// Use authorization endpoint from discovery
+		authEndpoint = discovery.AuthorizationEndpoint
+	}
 
 	// Create OIDC-based implementation with OAuth
 	baseImpl := impl.NewOidcBasedImplementationWithOAuth(
@@ -633,8 +715,7 @@ func main() {
 		baseImpl.SetInsecureIgnoreScopes(true)
 	}
 
-	// Setup complete RemoteStorage server (no built-in OAuth portal needed)
-	mux := http.NewServeMux()
+	// Create storage handler
 	storageHandler := rsserver.NewStorageHandler(baseImpl)
 
 	// Create middleware chain (auth is now handled in implementation)
@@ -650,11 +731,12 @@ func main() {
 	// Add webfinger endpoints
 	setupWebfingerEndpoints(mux, authEndpoint, config)
 
-	// Create PKCE store
-	pkceStore := NewPKCEStore()
-
-	// Add OAuth endpoints
-	setupOAuthEndpoints(mux, authEndpoint, config, pkceStore)
+	// Add OAuth endpoints if not using internal provider
+	if oauthProvider == nil {
+		// Create PKCE store for external OAuth
+		pkceStore := NewPKCEStore()
+		setupOAuthEndpoints(mux, authEndpoint, config, pkceStore)
+	}
 
 	// Add a simple status endpoint
 	statusPath := "/status"
@@ -733,6 +815,7 @@ Configuration:
   Sub Claim: %s
   Username Claim: %s
   Client Type: %s
+  Internal OAuth: %v
   Configured Users: %d
 
 Endpoints:
@@ -767,6 +850,7 @@ Example OAuth flow:
 			}
 			return "Public (no client secret)"
 		}(),
+		config.OAuth.Internal != nil && config.OAuth.Internal.Enabled,
 		len(config.WebfingerUsers), storageEndpoint, config.StorageHost, config.StorageHost, config.BaseRoute, exampleBase, exampleBase, exampleBase, config.StorageHost, config.StorageHost, config.StorageHost, config.StorageHost, config.StorageHost, config.BaseRoute)
 
 	log.Print(startupMsg)

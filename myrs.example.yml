@@ -23,7 +23,11 @@ baseRoute: "/"
 corsOrigin: "*"
 
 oauth:
-  discoveryURL: "https://id.put.plus/.well-known/openid-configuration"
+  # Option 1: Use an external OAuth provider directly
+  # discoveryURL: "https://id.put.plus/.well-known/openid-configuration"
+  
+  # Option 2: Use the internal OAuth provider (recommended for providers without custom scope support)
+  discoveryURL: "https://localhost:8080/.well-known/openid-configuration"  # Points to this server
 
   # OAuth client ID for this RemoteStorage server
   clientID: "remotestorage-server"
@@ -51,6 +55,21 @@ oauth:
   # Valid values: "sub", "user_id", "username", "preferred_username"
   # Default: "preferred_username"
   usernameClaim: "preferred_username"
+  
+  # Internal OAuth provider configuration (optional)
+  # Enable this to use the built-in OAuth provider that delegates to an upstream OIDC provider
+  # This is useful when your OIDC provider doesn't support custom RemoteStorage scopes
+  internal:
+    enabled: true
+    
+    # Secret for signing JWT tokens (REQUIRED - use a secure random value!)
+    jwtSecret: "change-me-to-a-secure-random-secret-at-least-32-chars"
+    
+    # Upstream OIDC provider configuration
+    upstream:
+      discoveryURL: "https://id.put.plus/.well-known/openid-configuration"
+      clientID: "myrs-oauth-server"
+      clientSecret: "your-client-secret-with-pocketid"
 
 # Static list of users for webfinger responses
 # Only users listed here will have webfinger responses served
