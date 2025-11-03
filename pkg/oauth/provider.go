@@ -17,20 +17,20 @@ import (
 
 // Provider implements an OAuth2 provider that delegates to an upstream OIDC provider
 type Provider struct {
-	publicURL       string
-	jwtSecret       []byte
-	upstreamClient  *UpstreamClient
-	userMappings    map[string]string // sub -> username
-	stateStore      *StateStore
-	tokenStore      *TokenStore
+	publicURL      string
+	jwtSecret      []byte
+	upstreamClient *UpstreamClient
+	userMappings   map[string]string // sub -> username
+	stateStore     *StateStore
+	tokenStore     *TokenStore
 }
 
 // Config for the OAuth provider
 type Config struct {
-	PublicURL       string
-	JWTSecret       string
-	UpstreamClient  *UpstreamClient
-	UserMappings    []UserMapping
+	PublicURL      string
+	JWTSecret      string
+	UpstreamClient *UpstreamClient
+	UserMappings   []UserMapping
 }
 
 type UserMapping struct {
@@ -62,12 +62,12 @@ type AuthState struct {
 }
 
 type TokenData struct {
-	AccessToken  string
-	Sub          string
-	Username     string
-	Scopes       []string
-	IssuedAt     time.Time
-	ExpiresAt    time.Time
+	AccessToken string
+	Sub         string
+	Username    string
+	Scopes      []string
+	IssuedAt    time.Time
+	ExpiresAt   time.Time
 }
 
 type StateStore struct {
@@ -118,10 +118,10 @@ func (p *Provider) RegisterHandlers(mux *http.ServeMux, basePath string) {
 // GetDiscovery returns the OIDC discovery document
 func (p *Provider) GetDiscovery(basePath string) map[string]interface{} {
 	return map[string]interface{}{
-		"issuer":                 p.publicURL,
-		"authorization_endpoint": p.publicURL + basePath + "/authorize",
-		"token_endpoint":         p.publicURL + basePath + "/token",
-		"introspection_endpoint": p.publicURL + basePath + "/introspect",
+		"issuer":                   p.publicURL,
+		"authorization_endpoint":   p.publicURL + basePath + "/authorize",
+		"token_endpoint":           p.publicURL + basePath + "/token",
+		"introspection_endpoint":   p.publicURL + basePath + "/introspect",
 		"response_types_supported": []string{"token", "code"},
 		"grant_types_supported":    []string{"implicit", "authorization_code"},
 		"scopes_supported": []string{
@@ -181,7 +181,7 @@ func (p *Provider) handleCallback(w http.ResponseWriter, r *http.Request) {
 	// Get authorization code and state
 	code := r.URL.Query().Get("code")
 	state := r.URL.Query().Get("state")
-	
+
 	if code == "" || state == "" {
 		http.Error(w, "Missing code or state", http.StatusBadRequest)
 		return

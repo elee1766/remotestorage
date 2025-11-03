@@ -13,4 +13,3 @@ type Link struct {
 	Href       string         `json:"href,omitempty"`
 	Properties map[string]any `json:"properties,omitempty"`
 }
-

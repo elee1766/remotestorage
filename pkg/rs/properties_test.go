@@ -8,7 +8,6 @@ import (
 	"anime.bike/remotestorage/pkg/nullable"
 )
 
-
 func TestRemoteStorageProperties_MarshalJSON(t *testing.T) {
 	props := &RemoteStorageProperties{
 		Version:             SupportedVersion,
@@ -24,7 +23,7 @@ func TestRemoteStorageProperties_MarshalJSON(t *testing.T) {
 	}
 
 	jsonStr := string(data)
-	
+
 	// Check that all fields are present
 	expectedFields := []string{
 		`"http://remotestorage.io/spec/version":"draft-dejong-remotestorage-25"`,
@@ -40,4 +39,3 @@ func TestRemoteStorageProperties_MarshalJSON(t *testing.T) {
 		}
 	}
 }
-

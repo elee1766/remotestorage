@@ -8,15 +8,17 @@ import (
 	"anime.bike/remotestorage/pkg/rsserver/rsstorage/rsstorage_inmemory"
 )
 
-// BucketStorage implements StorageBackend for a single bucket
+// BucketStorage implements StorageBackend for a single user on shared storage
 type BucketStorage struct {
-	inner *rsstorage_inmemory.InMemoryStorage
+	inner  *rsstorage_inmemory.InMemoryStorage
+	userID string
 }
 
-// NewBucketStorage creates a new bucket storage instance
-func NewBucketStorage() *BucketStorage {
+// NewBucketStorage creates a new bucket storage instance for a specific user
+func NewBucketStorage(sharedStorage *rsstorage_inmemory.InMemoryStorage, userID string) *BucketStorage {
 	return &BucketStorage{
-		inner: rsstorage_inmemory.NewInMemoryStorage(),
+		inner:  sharedStorage,
+		userID: userID,
 	}
 }
 

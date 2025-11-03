@@ -7,8 +7,8 @@ func GetFolderListingContext() interface{} {
 		"items": map[string]interface{}{
 			"@container": "@index",
 		},
-		"ETag": "http://www.w3.org/2011/http-headers#etag",
-		"Content-Type": "http://www.w3.org/2011/http-headers#content-type",
+		"ETag":           "http://www.w3.org/2011/http-headers#etag",
+		"Content-Type":   "http://www.w3.org/2011/http-headers#content-type",
 		"Content-Length": "http://www.w3.org/2011/http-headers#content-length",
 	}
 }

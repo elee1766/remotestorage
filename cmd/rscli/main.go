@@ -121,7 +121,6 @@ func parseRemotePath(remotePath string) (remote, path string, err error) {
 	return remote, path, nil
 }
 
-
 // getConfigDir returns the config directory path
 func getConfigDir() (string, error) {
 	configDir := os.Getenv("XDG_CONFIG_HOME")
@@ -206,7 +205,7 @@ func getOrCreateAuth(ctx context.Context, remote string) (*AuthInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("discovery failed: %w", err)
 	}
-	
+
 	fmt.Printf("Discovery successful! Storage URL: %s\n", storageInfo.Href)
 
 	// Get auth URL
@@ -215,7 +214,7 @@ func getOrCreateAuth(ctx context.Context, remote string) (*AuthInfo, error) {
 		fmt.Printf("Failed to get auth URL from properties: %v\n", storageInfo.Properties)
 		return nil, fmt.Errorf("no auth endpoint found: %w", err)
 	}
-	
+
 	fmt.Printf("Auth endpoint found: %s\n", authURL)
 
 	// Build OAuth URL
@@ -341,7 +340,7 @@ if (hash) {
 	fmt.Printf("\n=== Authentication Required ===\n")
 	fmt.Printf("Opening browser for authentication...\n")
 	fmt.Printf("\nVisit this URL to authenticate:\n%s\n\n", oauthURL)
-	
+
 	if err := browser.OpenURL(oauthURL); err != nil {
 		fmt.Printf("Failed to open browser automatically: %v\n", err)
 		fmt.Printf("Please open the URL manually in your browser.\n")

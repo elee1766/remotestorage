@@ -48,7 +48,7 @@ func (s *InMemoryStorage) Get(ctx context.Context, user_id, path string) (*rs.Do
 	defer s.mu.RUnlock()
 
 	fullPath := buildPath(user_id, path)
-	
+
 	// Check if it's a file
 	if file, ok := s.files[fullPath]; ok {
 		return &rs.Document{
@@ -73,7 +73,7 @@ func (s *InMemoryStorage) Get(ctx context.Context, user_id, path string) (*rs.Do
 	// Build folder listing
 	items := make(map[string]rs.FolderItem)
 	dirFound := false
-	
+
 	for filePath, file := range s.files {
 		if strings.HasPrefix(filePath, fullPath) {
 			relPath := strings.TrimPrefix(filePath, fullPath)
@@ -112,7 +112,7 @@ func (s *InMemoryStorage) Get(ctx context.Context, user_id, path string) (*rs.Do
 
 	// Calculate folder ETag
 	folderEtag := calculateFolderEtag(items)
-	
+
 	listing := &rs.FolderListing{
 		LDContext: rs.GetFolderListingContext(),
 		Metadata: rs.Metadata{
@@ -133,7 +133,7 @@ func (s *InMemoryStorage) Create(ctx context.Context, user_id, path string, body
 	defer s.mu.Unlock()
 
 	fullPath := buildPath(user_id, path)
-	
+
 	// Check if already exists
 	if _, exists := s.files[fullPath]; exists {
 		return "", rs.ErrAlreadyExists
@@ -147,7 +147,7 @@ func (s *InMemoryStorage) Create(ctx context.Context, user_id, path string, body
 
 	// Generate ETag
 	etag := generateEtag(content)
-	
+
 	// Store file
 	s.files[fullPath] = &fileData{
 		content:      content,
@@ -168,7 +168,7 @@ func (s *InMemoryStorage) Update(ctx context.Context, user_id, path string, body
 	defer s.mu.Unlock()
 
 	fullPath := buildPath(user_id, path)
-	
+
 	// Check if exists
 	file, exists := s.files[fullPath]
 	if !exists {
@@ -188,7 +188,7 @@ func (s *InMemoryStorage) Update(ctx context.Context, user_id, path string, body
 
 	// Generate new ETag
 	newEtag := generateEtag(content)
-	
+
 	// Update file
 	s.files[fullPath] = &fileData{
 		content:      content,
@@ -209,7 +209,7 @@ func (s *InMemoryStorage) Delete(ctx context.Context, user_id, path string, etag
 	defer s.mu.Unlock()
 
 	fullPath := buildPath(user_id, path)
-	
+
 	// Check if exists
 	file, exists := s.files[fullPath]
 	if !exists {
@@ -236,7 +236,7 @@ func (s *InMemoryStorage) Head(ctx context.Context, user_id, path string) (*rs.M
 	defer s.mu.RUnlock()
 
 	fullPath := buildPath(user_id, path)
-	
+
 	// Check if it's a file
 	file, ok := s.files[fullPath]
 	if !ok {
@@ -260,7 +260,7 @@ func (s *InMemoryStorage) GetRange(ctx context.Context, user_id, path string, st
 	defer s.mu.RUnlock()
 
 	fullPath := buildPath(user_id, path)
-	
+
 	// Check if it's a file
 	file, ok := s.files[fullPath]
 	if !ok {
@@ -268,7 +268,7 @@ func (s *InMemoryStorage) GetRange(ctx context.Context, user_id, path string, st
 	}
 
 	contentLen := int64(len(file.content))
-	
+
 	// Handle special cases for start and end
 	if start == -1 {
 		// Last N bytes case: start = -1, end = number of bytes
@@ -281,15 +281,15 @@ func (s *InMemoryStorage) GetRange(ctx context.Context, user_id, path string, st
 		// From start to end of file
 		end = contentLen - 1
 	}
-	
+
 	// Validate range
 	if start < 0 || start >= contentLen || end < start || end >= contentLen {
 		return nil, fmt.Errorf("invalid range: start=%d, end=%d, content_length=%d", start, end, contentLen)
 	}
-	
+
 	// Extract the range
-	rangeContent := file.content[start:end+1]
-	
+	rangeContent := file.content[start : end+1]
+
 	return &rs.Document{
 		Metadata: rs.Metadata{
 			Path:         path,
@@ -350,4 +350,3 @@ func (s *InMemoryStorage) updateParentDirs(user_id, path string) {
 		}
 	}
 }
-

@@ -21,4 +21,3 @@ func AuthInfoFromContext(ctx context.Context) (*AuthInfo, bool) {
 	authInfo, ok := ctx.Value(authInfoKey).(*AuthInfo)
 	return authInfo, ok
 }
-

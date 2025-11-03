@@ -15,8 +15,8 @@ type StorageInfo struct {
 
 // Metadata represents document or folder metadata
 type Metadata struct {
-	Path         string    // Full path including name
-	Name         string    // Just the item name
+	Path         string // Full path including name
+	Name         string // Just the item name
 	ContentType  string
 	ETag         string
 	LastModified time.Time
@@ -66,10 +66,10 @@ type VersionName string
 const (
 	RemoteStorageRel = "http://tools.ietf.org/id/draft-dejong-remotestorage"
 	PublicModule     = "public"
-	
+
 	// Version constants
 	VersionDraftDejongRemoteStorage25 VersionName = "draft-dejong-remotestorage-25"
-	
+
 	// The only version we support
 	SupportedVersion = VersionDraftDejongRemoteStorage25
 )
@@ -81,32 +81,32 @@ func CheckScopeAccess(scopes []Scope, module string, isRead bool) bool {
 	if module == PublicModule && isRead {
 		return true
 	}
-	
+
 	// Check each scope for access
 	for _, scope := range scopes {
 		// '*:rw' grants any request
 		if scope.Module == "*" && scope.Access == ReadWriteAccess {
 			return true
 		}
-		
+
 		// '*:r' grants any read request
 		if scope.Module == "*" && scope.Access == ReadAccess && isRead {
 			return true
 		}
-		
+
 		// Module-specific access
 		if scope.Module == module {
 			// '<module>:rw' grants any request to the module
 			if scope.Access == ReadWriteAccess {
 				return true
 			}
-			
+
 			// '<module>:r' grants read requests to the module
 			if scope.Access == ReadAccess && isRead {
 				return true
 			}
 		}
 	}
-	
+
 	return false
 }

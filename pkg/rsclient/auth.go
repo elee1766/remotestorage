@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"golang.org/x/oauth2"
 	"anime.bike/remotestorage/pkg/rs"
+	"golang.org/x/oauth2"
 )
 
 // GetOAuth2Config creates an OAuth2 config for RemoteStorage
@@ -37,29 +37,29 @@ func GetAuthCodeURL(config *oauth2.Config, state string) string {
 func ParseScope(scopeString string) ([]rs.Scope, error) {
 	parts := strings.Split(scopeString, " ")
 	scopes := make([]rs.Scope, 0, len(parts))
-	
+
 	for _, part := range parts {
 		if part == "" {
 			continue
 		}
-		
+
 		colonIndex := strings.LastIndex(part, ":")
 		if colonIndex == -1 {
 			return nil, fmt.Errorf("invalid scope format: %s", part)
 		}
-		
+
 		module := part[:colonIndex]
 		access := rs.AccessLevel(part[colonIndex+1:])
-		
+
 		if access != rs.ReadAccess && access != rs.ReadWriteAccess {
 			return nil, fmt.Errorf("invalid access level: %s", access)
 		}
-		
+
 		scopes = append(scopes, rs.Scope{
 			Module: module,
 			Access: access,
 		})
 	}
-	
+
 	return scopes, nil
 }

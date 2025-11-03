@@ -105,7 +105,7 @@ func GetAuthURL(storageInfo *rs.StorageInfo) (string, error) {
 	if storageInfo.Properties == nil {
 		return "", fmt.Errorf("no properties in storage info")
 	}
-	
+
 	authEndpoint, ok := storageInfo.Properties["http://tools.ietf.org/html/rfc6749#section-4.2"].(string)
 	if !ok || authEndpoint == "" {
 		authEndpoint, ok = storageInfo.Properties["auth-endpoint"].(string)
@@ -113,10 +113,9 @@ func GetAuthURL(storageInfo *rs.StorageInfo) (string, error) {
 			return "", fmt.Errorf("no auth endpoint found in properties")
 		}
 	}
-	
+
 	return authEndpoint, nil
 }
-
 
 // FindRemoteStorageLink finds the RemoteStorage link in a WebFinger response
 func FindRemoteStorageLink(resp *webfinger.Response) *webfinger.Link {

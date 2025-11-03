@@ -26,7 +26,7 @@ func ExtractHost(resource string) (string, error) {
 		}
 		return parts[1], nil
 	}
-	
+
 	// Handle user@host format
 	if strings.Contains(resource, "@") && !strings.Contains(resource, "://") {
 		parts := strings.Split(resource, "@")
@@ -35,7 +35,7 @@ func ExtractHost(resource string) (string, error) {
 		}
 		return parts[1], nil
 	}
-	
+
 	// Handle HTTP(S) URLs
 	if strings.HasPrefix(resource, "http://") || strings.HasPrefix(resource, "https://") {
 		u, err := url.Parse(resource)
@@ -44,7 +44,7 @@ func ExtractHost(resource string) (string, error) {
 		}
 		return u.Host, nil
 	}
-	
+
 	return "", fmt.Errorf("unsupported resource format")
 }
 

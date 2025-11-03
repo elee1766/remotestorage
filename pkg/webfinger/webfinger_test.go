@@ -65,7 +65,7 @@ func TestWebFinger_MarshalJSON(t *testing.T) {
 
 func TestWebFinger_WithMapProperties(t *testing.T) {
 	wf := NewWebFinger("user@example.com")
-	
+
 	// Test adding link with map properties
 	link := WebFingLink{
 		Rel:  rs.RemoteStorageRel,
@@ -73,7 +73,7 @@ func TestWebFinger_WithMapProperties(t *testing.T) {
 		Href: "https://storage.example.com",
 		Properties: map[string]interface{}{
 			"http://remotestorage.io/spec/version": string(rs.SupportedVersion),
-			"custom-property": "custom-value",
+			"custom-property":                      "custom-value",
 		},
 	}
 	wf.Links = append(wf.Links, link)

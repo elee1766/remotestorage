@@ -5,8 +5,8 @@ import (
 	"io"
 	"path/filepath"
 
-	"github.com/spf13/afero"
 	"anime.bike/remotestorage/pkg/rs"
+	"github.com/spf13/afero"
 )
 
 // BucketFilesystemStorage implements StorageBackend for a single bucket using filesystem
