@@ -3,19 +3,16 @@ package rsserver
 import (
 	"errors"
 	"fmt"
+	"net/http"
+
+	"anime.bike/remotestorage/pkg/rs"
 )
 
-// Common storage errors that backends can return
+// Additional storage errors specific to the server layer
 var (
-	// ErrNotFound indicates the requested resource does not exist
-	ErrNotFound = errors.New("resource not found")
-
 	// ErrOutOfRange indicates the requested byte range is invalid or unsatisfiable
 	// This should be returned when a range request exceeds the file size
 	ErrOutOfRange = errors.New("requested range not satisfiable")
-
-	// ErrStorageFailure indicates an internal storage error occurred
-	ErrStorageFailure = errors.New("storage operation failed")
 )
 
 // StorageError wraps storage errors with additional context
@@ -40,4 +37,37 @@ func NewStorageError(op, path string, err error) *StorageError {
 		Path: path,
 		Err:  err,
 	}
+}
+
+// handleStorageError converts storage errors to appropriate HTTP errors
+func handleStorageError(err error) *HTTPError {
+	if err == nil {
+		return nil
+	}
+
+	// Unwrap StorageError to get the underlying error
+	if se, ok := err.(*StorageError); ok {
+		err = se.Err
+	}
+
+	// Check for specific error types from rs package (storage backend errors)
+	if errors.Is(err, rs.ErrNotFound) {
+		return NewHTTPError(http.StatusNotFound, "Not found")
+	}
+
+	if errors.Is(err, rs.ErrAlreadyExists) {
+		return NewHTTPError(http.StatusPreconditionFailed, "Precondition Failed")
+	}
+
+	if errors.Is(err, rs.ErrPreconditionFailed) {
+		return NewHTTPError(http.StatusPreconditionFailed, "Precondition Failed")
+	}
+
+	// Check for server-layer errors
+	if errors.Is(err, ErrOutOfRange) {
+		return NewHTTPError(http.StatusRequestedRangeNotSatisfiable, "Range not satisfiable")
+	}
+
+	// Default to internal server error
+	return NewHTTPError(http.StatusInternalServerError, "Internal server error")
 }

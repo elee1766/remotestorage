@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"anime.bike/remotestorage/pkg/rs"
 )
@@ -67,10 +68,16 @@ func (s *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 
 // handleGetRange handles GET requests with Range header (partial content)
 func (s *Handler) handleGetRange(w http.ResponseWriter, r *http.Request, ctx context.Context, storage StorageBackend, authInfo *AuthInfo, req *ResourceRequest, rangeHeader string) {
+	// Range requests only apply to documents, not folders
+	if strings.HasSuffix(req.Resource.Path, "/") {
+		http.Error(w, "Range requests not supported for folders", http.StatusBadRequest)
+		return
+	}
+
 	// First, get metadata to check If-None-Match before retrieving document body
 	metadata, err := storage.Head(ctx, req.Resource.Path)
 	if err != nil {
-		http.Error(w, "Not found", http.StatusNotFound)
+		handleHTTPError(w, handleStorageError(err))
 		return
 	}
 
@@ -97,12 +104,12 @@ func (s *Handler) handleGetRange(w http.ResponseWriter, r *http.Request, ctx con
 	// Get the document with range
 	doc, err := rangeStorage.GetRange(ctx, req.Resource.Path, httpRange.Start, httpRange.End)
 	if err != nil {
-		http.Error(w, "Not found", http.StatusNotFound)
+		handleHTTPError(w, handleStorageError(err))
 		return
 	}
 
 	if doc == nil {
-		http.Error(w, "Not found", http.StatusNotFound)
+		handleHTTPError(w, handleStorageError(rs.ErrNotFound))
 		return
 	}
 
@@ -137,7 +144,7 @@ func (s *Handler) handleGetFull(w http.ResponseWriter, r *http.Request, ctx cont
 	// First, get metadata to check If-None-Match before retrieving document body
 	metadata, err := storage.Head(ctx, req.Resource.Path)
 	if err != nil {
-		http.Error(w, "Not found", http.StatusNotFound)
+		handleHTTPError(w, handleStorageError(err))
 		return
 	}
 
@@ -150,12 +157,12 @@ func (s *Handler) handleGetFull(w http.ResponseWriter, r *http.Request, ctx cont
 	// Now retrieve the full document/listing
 	doc, listing, err := storage.Get(ctx, req.Resource.Path)
 	if err != nil {
-		http.Error(w, "Not found", http.StatusNotFound)
+		handleHTTPError(w, handleStorageError(err))
 		return
 	}
 
 	if listing == nil && doc == nil {
-		http.Error(w, "Not found", http.StatusNotFound)
+		handleHTTPError(w, handleStorageError(rs.ErrNotFound))
 		return
 	}
 

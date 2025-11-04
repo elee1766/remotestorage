@@ -51,7 +51,7 @@ func (s *Handler) handleHead(w http.ResponseWriter, r *http.Request) {
 	path := resourceRef.Path
 	metadata, err := storage.Head(ctx, path)
 	if err != nil {
-		http.Error(w, "Not found", http.StatusNotFound)
+		handleHTTPError(w, handleStorageError(err))
 		return
 	}
 

@@ -70,13 +70,7 @@ func (s *Handler) handlePut(w http.ResponseWriter, r *http.Request) {
 	if ifMatch != "" {
 		etag, err = storage.Update(ctx, path, r.Body, contentType, ifMatch)
 		if err != nil {
-			if errors.Is(err, rs.ErrNotFound) {
-				http.Error(w, "Not found", http.StatusNotFound)
-			} else if errors.Is(err, rs.ErrPreconditionFailed) {
-				http.Error(w, "Precondition Failed", http.StatusPreconditionFailed)
-			} else {
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
-			}
+			handleHTTPError(w, handleStorageError(err))
 			return
 		}
 		w.Header().Set("ETag", etag)
@@ -90,15 +84,13 @@ func (s *Handler) handlePut(w http.ResponseWriter, r *http.Request) {
 	// Our interpretation: no precondition also creates only (strict mode)
 	etag, err = storage.Create(ctx, path, r.Body, contentType)
 	if err != nil {
+		// Per spec: include current ETag in 412 response so client knows what exists
 		if errors.Is(err, rs.ErrAlreadyExists) {
-			// Per spec: include current ETag in 412 response so client knows what exists
 			if meta, err := storage.Head(ctx, path); err == nil && meta.ETag != "" {
 				w.Header().Set("ETag", meta.ETag)
 			}
-			http.Error(w, "Precondition Failed", http.StatusPreconditionFailed)
-		} else {
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
 		}
+		handleHTTPError(w, handleStorageError(err))
 		return
 	}
 	w.Header().Set("ETag", etag)

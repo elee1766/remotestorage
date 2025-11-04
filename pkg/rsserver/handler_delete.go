@@ -53,7 +53,7 @@ func (s *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 	err = storage.Delete(ctx, path, ifMatch)
 	if err != nil {
-		http.Error(w, "Not found", http.StatusNotFound)
+		handleHTTPError(w, handleStorageError(err))
 		return
 	}
 
