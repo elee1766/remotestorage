@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 
-	"anime.bike/remotestorage/pkg/oauth"
 	"anime.bike/remotestorage/pkg/rsserver"
 	"anime.bike/remotestorage/pkg/rsserver/rsstorage"
 	"anime.bike/remotestorage/pkg/rsserver/rsstorage/rsstorage_inmemory"
@@ -99,11 +98,11 @@ func (s *SimpleResourceResolver) ResolveResource(r *http.Request) (*rsserver.Res
 
 // SimpleAuthenticator validates bearer tokens using an OAuth provider
 type SimpleAuthenticator struct {
-	oauthProvider *oauth.SimpleProvider
+	oauthProvider *SimpleOAuthProvider
 }
 
 // NewSimpleAuthenticator creates a new authenticator
-func NewSimpleAuthenticator(oauthProvider *oauth.SimpleProvider) *SimpleAuthenticator {
+func NewSimpleAuthenticator(oauthProvider *SimpleOAuthProvider) *SimpleAuthenticator {
 	return &SimpleAuthenticator{
 		oauthProvider: oauthProvider,
 	}

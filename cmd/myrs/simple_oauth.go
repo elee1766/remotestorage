@@ -1,4 +1,4 @@
-package oauth
+package main
 
 import (
 	"crypto/rand"
@@ -13,15 +13,15 @@ import (
 	"anime.bike/remotestorage/pkg/rs"
 )
 
-// User represents a configured user with credentials and allowed scopes
-type User struct {
+// OAuthUser represents a configured user with credentials and allowed scopes
+type OAuthUser struct {
 	Username      string
 	Password      string
 	AllowedScopes []rs.Scope // Pre-configured scopes this user can access
 }
 
-// Token represents an issued access token
-type Token struct {
+// OAuthToken represents an issued access token
+type OAuthToken struct {
 	AccessToken string
 	Username    string
 	Scopes      []rs.Scope
@@ -29,30 +29,30 @@ type Token struct {
 	ExpiresAt   time.Time
 }
 
-// SimpleProvider is a minimal OAuth 2.0 provider for proof of concept
+// SimpleOAuthProvider is a minimal OAuth 2.0 provider for proof of concept
 // It uses static user configuration and auto-approves all requests
-type SimpleProvider struct {
+type SimpleOAuthProvider struct {
 	mu     sync.RWMutex
-	users  map[string]*User  // username -> user
-	tokens map[string]*Token // access_token -> token
+	users  map[string]*OAuthUser  // username -> user
+	tokens map[string]*OAuthToken // access_token -> token
 }
 
-// NewSimpleProvider creates a new simple OAuth provider
-func NewSimpleProvider(users []*User) *SimpleProvider {
-	userMap := make(map[string]*User)
+// NewSimpleOAuthProvider creates a new simple OAuth provider
+func NewSimpleOAuthProvider(users []*OAuthUser) *SimpleOAuthProvider {
+	userMap := make(map[string]*OAuthUser)
 	for _, user := range users {
 		userMap[user.Username] = user
 	}
 
-	return &SimpleProvider{
+	return &SimpleOAuthProvider{
 		users:  userMap,
-		tokens: make(map[string]*Token),
+		tokens: make(map[string]*OAuthToken),
 	}
 }
 
 // HandleAuthDialog handles the OAuth 2.0 implicit grant authorization endpoint
 // For PoC: auto-approves if user exists and has valid credentials
-func (p *SimpleProvider) HandleAuthDialog(w http.ResponseWriter, r *http.Request) {
+func (p *SimpleOAuthProvider) HandleAuthDialog(w http.ResponseWriter, r *http.Request) {
 	// Extract OAuth parameters
 	clientID := r.URL.Query().Get("client_id")
 	redirectURI := r.URL.Query().Get("redirect_uri")
@@ -81,7 +81,7 @@ func (p *SimpleProvider) HandleAuthDialog(w http.ResponseWriter, r *http.Request
 }
 
 // showLoginForm displays a simple login form
-func (p *SimpleProvider) showLoginForm(w http.ResponseWriter, r *http.Request, clientID, redirectURI, scope, state string) {
+func (p *SimpleOAuthProvider) showLoginForm(w http.ResponseWriter, r *http.Request, clientID, redirectURI, scope, state string) {
 	html := fmt.Sprintf(`<!DOCTYPE html>
 <html>
 <head><title>remoteStorage Authorization</title></head>
@@ -112,7 +112,7 @@ func (p *SimpleProvider) showLoginForm(w http.ResponseWriter, r *http.Request, c
 }
 
 // handleLogin processes login and issues token
-func (p *SimpleProvider) handleLogin(w http.ResponseWriter, r *http.Request, clientID, redirectURI, scope, state string) {
+func (p *SimpleOAuthProvider) handleLogin(w http.ResponseWriter, r *http.Request, clientID, redirectURI, scope, state string) {
 	username := r.FormValue("username")
 	password := r.FormValue("password")
 
@@ -133,11 +133,11 @@ func (p *SimpleProvider) handleLogin(w http.ResponseWriter, r *http.Request, cli
 	grantedScopes := filterGrantedScopes(requestedScopes, user.AllowedScopes)
 
 	// Generate access token
-	accessToken := generateToken()
+	accessToken := generateOAuthToken()
 
 	// Store token
 	p.mu.Lock()
-	p.tokens[accessToken] = &Token{
+	p.tokens[accessToken] = &OAuthToken{
 		AccessToken: accessToken,
 		Username:    username,
 		Scopes:      grantedScopes,
@@ -169,7 +169,7 @@ func (p *SimpleProvider) handleLogin(w http.ResponseWriter, r *http.Request, cli
 }
 
 // ValidateToken validates a bearer token and returns user info and scopes
-func (p *SimpleProvider) ValidateToken(token string) (username string, scopes []rs.Scope, err error) {
+func (p *SimpleOAuthProvider) ValidateToken(token string) (username string, scopes []rs.Scope, err error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
@@ -186,8 +186,8 @@ func (p *SimpleProvider) ValidateToken(token string) (username string, scopes []
 	return t.Username, t.Scopes, nil
 }
 
-// generateToken generates a random access token
-func generateToken() string {
+// generateOAuthToken generates a random access token
+func generateOAuthToken() string {
 	bytes := make([]byte, 32)
 	rand.Read(bytes)
 	return hex.EncodeToString(bytes)

@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 
-	"anime.bike/remotestorage/pkg/oauth"
 	"anime.bike/remotestorage/pkg/rs"
 	"anime.bike/remotestorage/pkg/rsserver"
 )
@@ -40,7 +39,7 @@ func main() {
 	}
 
 	// Convert config users to OAuth users
-	oauthUsers := make([]*oauth.User, len(config.Users))
+	oauthUsers := make([]*OAuthUser, len(config.Users))
 	for i, userCfg := range config.Users {
 		scopes := make([]rs.Scope, len(userCfg.Scopes))
 		for j, scopeCfg := range userCfg.Scopes {
@@ -60,7 +59,7 @@ func main() {
 			}
 		}
 
-		oauthUsers[i] = &oauth.User{
+		oauthUsers[i] = &OAuthUser{
 			Username:      userCfg.Username,
 			Password:      userCfg.Password,
 			AllowedScopes: scopes,
@@ -68,7 +67,7 @@ func main() {
 	}
 
 	// Create OAuth provider
-	oauthProvider := oauth.NewSimpleProvider(oauthUsers)
+	oauthProvider := NewSimpleOAuthProvider(oauthUsers)
 
 	// Build storage handler using builder pattern
 	storageHandler := rsserver.NewBuilder().
