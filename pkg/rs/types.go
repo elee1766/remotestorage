@@ -68,10 +68,10 @@ const (
 	PublicModule     = "public"
 
 	// Version constants
-	VersionDraftDejongRemoteStorage25 VersionName = "draft-dejong-remotestorage-25"
+	VersionDraftDejongRemoteStorage27 VersionName = "draft-dejong-remotestorage-27"
 
 	// The only version we support
-	SupportedVersion = VersionDraftDejongRemoteStorage25
+	SupportedVersion = VersionDraftDejongRemoteStorage27
 )
 
 // CheckScopeAccess implements RemoteStorage-compliant scope checking

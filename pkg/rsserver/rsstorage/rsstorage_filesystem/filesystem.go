@@ -59,14 +59,9 @@ func (fs *FilesystemStorage) Get(ctx context.Context, path string) (*rs.Document
 	}
 
 	if !info.IsDir() {
-		// It's a file
 		return fs.getDocument(path, fullPath)
-	} else {
-		// It's a directory
-		return fs.getFolderListing(path, fullPath)
 	}
-
-	return nil, nil, rs.ErrNotFound
+	return fs.getFolderListing(path, fullPath)
 }
 
 // Create stores a new document

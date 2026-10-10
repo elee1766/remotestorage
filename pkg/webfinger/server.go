@@ -19,7 +19,7 @@ type UserStorageInfo struct {
 	// AuthEndpoint is the OAuth authorization endpoint URL (can be nil for Kerberos-only)
 	AuthEndpoint *string
 
-	// Version is the remoteStorage protocol version (defaults to draft-dejong-remotestorage-25)
+	// Version is the remoteStorage protocol version (defaults to draft-dejong-remotestorage-27)
 	Version string
 
 	// QueryTokenSupport indicates if bearer tokens can be passed via query parameter

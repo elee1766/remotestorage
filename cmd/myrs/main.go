@@ -155,7 +155,7 @@ func handleWebFinger(w http.ResponseWriter, r *http.Request, host string) {
 				"rel":  "http://tools.ietf.org/id/draft-dejong-remotestorage",
 				"href": fmt.Sprintf("http://%s/%s", host, username),
 				"properties": map[string]interface{}{
-					"http://remotestorage.io/spec/version":           "draft-dejong-remotestorage-25",
+					"http://remotestorage.io/spec/version":           "draft-dejong-remotestorage-27",
 					"http://tools.ietf.org/html/rfc6749#section-4.2": fmt.Sprintf("http://%s/oauth/authorize", host),
 				},
 			},

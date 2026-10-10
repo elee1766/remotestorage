@@ -26,7 +26,7 @@ func TestRemoteStorageProperties_MarshalJSON(t *testing.T) {
 
 	// Check that all fields are present
 	expectedFields := []string{
-		`"http://remotestorage.io/spec/version":"draft-dejong-remotestorage-25"`,
+		`"http://remotestorage.io/spec/version":"draft-dejong-remotestorage-27"`,
 		`"http://tools.ietf.org/html/rfc6749#section-4.2":"https://example.com/oauth"`,
 		`"http://tools.ietf.org/html/rfc6750#section-2.3":true`,
 		`"http://tools.ietf.org/html/rfc7233":"GET"`,

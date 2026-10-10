@@ -7,7 +7,7 @@ import (
 // RemoteStorageProperties represents the standardized WebFinger properties for RemoteStorage
 type RemoteStorageProperties struct {
 	// Version represents the RemoteStorage protocol version
-	// Example: "draft-dejong-remotestorage-25"
+	// Example: "draft-dejong-remotestorage-27"
 	Version VersionName `json:"http://remotestorage.io/spec/version"`
 
 	// AuthEndpoint represents the OAuth 2.0 authorization endpoint URL

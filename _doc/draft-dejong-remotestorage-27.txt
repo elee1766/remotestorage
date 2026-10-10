@@ -1,13 +1,13 @@
 INTERNET DRAFT                                      Michiel B. de Jong
-Document: draft-dejong-remotestorage-25                  (independent)
+Document: draft-dejong-remotestorage-27                  (independent)
                                                              F. Kooman
                                                          (independent)
                                                               S. Kippe
 Intended Status: Proposed Standard                       (independent)
-Expires: 1 December 2025                                  12 June 2025
+Expires: 18 December 2026                                 12 June 2026
 
 
-                            remoteStorage
+                          remoteStorage 1.0
 
 Abstract
 
@@ -34,11 +34,11 @@ Status of this Memo
    time.  It is inappropriate to use Internet-Drafts as reference
    material or to cite them other than as "work in progress."
 
-   This Internet-Draft will expire on 1 December 2025.
+   This Internet-Draft will expire on 18 December 2026.
 
 Copyright Notice
 
-   Copyright (c) 2025 IETF Trust and the persons identified as the
+   Copyright (c) 2026 IETF Trust and the persons identified as the
    document authors. All rights reserved.
 
    This document is subject to BCP 78 and the IETF Trust's Legal
@@ -52,7 +52,7 @@ Copyright Notice
 
 de Jong                                                         [Page 1]
 
-Internet-Draft              remoteStorage                      June 2025
+Internet-Draft              remoteStorage                      June 2026
 
 
    the Trust Legal Provisions and are provided without warranty as
@@ -65,28 +65,29 @@ Table of Contents
    4. Requests.......................................................4
    5. Response codes.................................................7
    6. Versioning.....................................................8
-   7. CORS headers...................................................8
+   7. CORS headers...................................................9
    8. Session description............................................9
    9. Bearer tokens and access control...............................9
   10. Application-first bearer token issuance.......................10
-  11. Storage-first bearer token issuance...........................12
-  12. Example wire transcripts......................................12
-     12.1. WebFinger................................................12
-     12.2. OAuth dialog form........................................13
-     12.3. OAuth dialog form submission.............................14
-     12.4. OPTIONS preflight........................................14
-     12.5. Initial PUT..............................................15
-     12.6. Subsequent PUT...........................................15
-     12.7. GET......................................................16
-     12.8. DELETE...................................................17
-  13. Distributed versioning........................................18
-  14. Security Considerations.......................................19
-  15. IANA Considerations...........................................20
-  16. Acknowledgments...............................................20
-  17. References....................................................20
-     17.1. Normative References.....................................20
-     17.2. Informative References...................................21
-  18. Authors' addresses............................................22
+     10.1. Optional PKCE support....................................12
+  11. Storage-first bearer token issuance...........................13
+  12. Example wire transcripts......................................13
+     12.1. WebFinger................................................13
+     12.2. OAuth dialog form........................................14
+     12.3. OAuth dialog form submission.............................15
+     12.4. OPTIONS preflight........................................15
+     12.5. Initial PUT..............................................16
+     12.6. Subsequent PUT...........................................16
+     12.7. GET......................................................17
+     12.8. DELETE...................................................18
+  13. Distributed versioning........................................19
+  14. Security Considerations.......................................20
+  15. IANA Considerations...........................................21
+  16. Acknowledgments...............................................21
+  17. References....................................................21
+     17.1. Normative References.....................................21
+     17.2. Informative References...................................22
+  18. Authors' addresses............................................23
 
 
 1.  Introduction
@@ -99,10 +100,10 @@ Table of Contents
     exposes are:
 
 
-
 de Jong                                                         [Page 2]
 
-Internet-Draft              remoteStorage                      June 2025
+Internet-Draft              remoteStorage                      June 2026
+
 
 
        *  GET a folder: retrieve the names and current versions of the
@@ -147,14 +148,14 @@ Internet-Draft              remoteStorage                      June 2025
        * item type (folder or document)
        * current version (ETag)
 
-    The list also contains, for each document in the list:
 
 
 de Jong                                                         [Page 3]
 
-Internet-Draft              remoteStorage                      June 2025
+Internet-Draft              remoteStorage                      June 2026
 
 
+    The list also contains, for each document in the list:
 
        * content type (media type, a.k.a. MIME type)
        * content length
@@ -197,14 +198,14 @@ Internet-Draft              remoteStorage                      June 2025
     Item names MAY contain all characters, before URI_ENCODE, except '/'
     and the null character '\0' and MUST NOT have zero length. Item
     names MUST NOT be equal to '.' or to '..', as those have a special
-    semantic in URIs (Section 5.2.4 of [URI]).
 
 
 de Jong                                                         [Page 4]
 
-Internet-Draft              remoteStorage                      June 2025
+Internet-Draft              remoteStorage                      June 2026
 
 
+    semantic in URIs (Section 5.2.4 of [URI]).
 
     A document description is a map containing one string-valued 'ETag'
     field, one string-valued 'Content-Type', one integer-valued
@@ -221,11 +222,11 @@ Internet-Draft              remoteStorage                      June 2025
     A successful GET request to a folder MUST be responded to with a
     JSON-LD [JSON-LD] document (content type 'application/ld+json'),
     containing as its 'items' field a map in which contained documents
-    appear as entries <item_name> to a document description, and
-    contained non-empty folders appear as entries <item_name> '/' to a
-    folder description. It MUST also contain an '@context' field with
-    the value 'http://remotestorage.io/spec/folder-description'. For
-    instance:
+    appear as entries <item_name> which map to a document
+    description, and contained non-empty folders appear as entries
+    <item_name> '/' which map to a folder description. It
+    MUST also contain an '@context' field with the value
+    'http://remotestorage.io/spec/folder-description'. For instance:
 
        {
          "@context": "http://remotestorage.io/spec/folder-description",
@@ -242,19 +243,21 @@ Internet-Draft              remoteStorage                      June 2025
          }
        }
 
+    ETags in folder descriptions MUST omit the double quotes surrounding
+    the value in HTTP headers.
 
     GET requests to empty folders SHOULD be responded to with a folder
     description with no items (the items field set to '{}'). However, an
-    empty folder MUST NOT be listed as an item in its parent folder.
-
-    PUT and DELETE requests only need to be made to documents, and never
 
 
 de Jong                                                         [Page 5]
 
-Internet-Draft              remoteStorage                      June 2025
+Internet-Draft              remoteStorage                      June 2026
 
 
+    empty folder MUST NOT be listed as an item in its parent folder.
+
+    PUT and DELETE requests only need to be made to documents, and never
     to folders. A document PUT will make all ancestor folders along its
     path become non-empty; deleting the last document from a subtree
     will make that whole subtree become empty. Folders will therefore
@@ -295,16 +298,16 @@ Internet-Draft              remoteStorage                      June 2025
          section 7.2].
 
     If no valid Content-Type header was received as part of a PUT
-    request, the server MAY refuse to process the request, and instead
-    respond with a descriptive error message in the body, as well as a
-    http response code from the 4xx range.
 
 
 de Jong                                                         [Page 6]
 
-Internet-Draft              remoteStorage                      June 2025
+Internet-Draft              remoteStorage                      June 2026
 
 
+    request, the server MAY refuse to process the request, and instead
+    respond with a descriptive error message in the body, as well as a
+    http response code from the 4xx range.
 
     RemoteStorage does not place any restrictions on the value of
     Content-Type other than what is defined in [HTTP, section 3.1.1.5].
@@ -345,16 +348,16 @@ Internet-Draft              remoteStorage                      June 2025
        * 404 for all DELETE, GET and HEAD requests to documents that do
              not exist on the storage,
        * 409 for a PUT request where any folder name in the path
-             clashes with an existing document's name at the same
-             level, or where the document name coincides with an
-             existing folder's name at the same level.
 
 
 de Jong                                                         [Page 7]
 
-Internet-Draft              remoteStorage                      June 2025
+Internet-Draft              remoteStorage                      June 2026
 
 
+             clashes with an existing document's name at the same
+             level, or where the document name coincides with an
+             existing folder's name at the same level.
        * 412 for a conditional PUT or DELETE request whose precondition
              fails (see "Versioning" below),
        * 413 if the payload is too large, e.g. when the server has a
@@ -379,10 +382,11 @@ Internet-Draft              remoteStorage                      June 2025
     'ETag' header [HTTP] with, in the case of GET and HEAD the current
     version, in the case of PUT, the new version, and in case of DELETE,
     the version that was deleted. All successful GET requests MUST
-    return a 'Cache-Control: no-cache' header. PUT and DELETE requests
-    MAY have an 'If-Match' request header [COND], and MUST fail with a
-    412 response code if that does not match the document's current
-    version.
+    return a 'Cache-Control: no-cache' header, except for requests in
+    the 'public' subtree which MUST return a 'Cache-Control: no-cache,
+    public' header. PUT and DELETE requests MAY have an 'If-Match'
+    request header [COND], and MUST fail with a 412 response code if
+    that does not match the document's current version.
 
     GET requests MAY have a comma-separated list of revisions in an
     'If-None-Match' header [COND], and SHOULD be responded to with a 304
@@ -394,17 +398,17 @@ Internet-Draft              remoteStorage                      June 2025
     A provider MAY offer version rollback functionality to its users,
     but this specification does not define the interface for that.
 
-7. CORS headers
-
-    All responses MUST carry CORS headers [CORS]. The server MUST also
-    reply to preflight OPTIONS requests as per CORS.
 
 
 de Jong                                                         [Page 8]
 
-Internet-Draft              remoteStorage                      June 2025
+Internet-Draft              remoteStorage                      June 2026
 
 
+7. CORS headers
+
+    All responses MUST carry CORS headers [CORS]. The server MUST also
+    reply to preflight OPTIONS requests as per CORS.
 
 
 
@@ -426,7 +430,7 @@ Internet-Draft              remoteStorage                      June 2025
          can however be reused in subsequent interactions with the same
          client, as long as that client is still trusted. Example:
          'ofb24f1ac3973e70j6vts19qr9v2eei'
-       * <storage_api>, always 'draft-dejong-remotestorage-25' for this
+       * <storage_api>, always 'draft-dejong-remotestorage-27' for this
          alternative version of the specification.
 
     The client can make its requests using HTTPS with CORS and bearer
@@ -444,17 +448,17 @@ Internet-Draft              remoteStorage                      June 2025
 
 9. Bearer tokens and access control
 
-    A bearer token represents one or more access scopes. These access
-    scopes are represented as strings of the form <module> <level>,
-    where the <module> string SHOULD be lower-case alphanumerical, other
-    than the reserved word 'public', and <level> can be ':r' or ':rw'.
 
 
 de Jong                                                         [Page 9]
 
-Internet-Draft              remoteStorage                      June 2025
+Internet-Draft              remoteStorage                      June 2026
 
 
+    A bearer token represents one or more access scopes. These access
+    scopes are represented as strings of the form <module> <level>,
+    where the <module> string SHOULD be lower-case alphanumerical, other
+    than the reserved word 'public', and <level> can be ':r' or ':rw'.
     The access the bearer token gives is the sum of its access scopes,
     with each access scope representing the following permissions:
 
@@ -494,17 +498,17 @@ Internet-Draft              remoteStorage                      June 2025
     <uri>:
 
     {
-      "href": <storage_root>,
-      "rel": "http://tools.ietf.org/id/draft-dejong-remotestorage",
-      "properties": {
-        "http://remotestorage.io/spec/version": <storage_api>,
 
 
 de Jong                                                        [Page 10]
 
-Internet-Draft              remoteStorage                      June 2025
+Internet-Draft              remoteStorage                      June 2026
 
 
+      "href": <storage_root>,
+      "rel": "http://tools.ietf.org/id/draft-dejong-remotestorage",
+      "properties": {
+        "http://remotestorage.io/spec/version": <storage_api>,
         "http://tools.ietf.org/html/rfc6749#section-4.2": <auth-dialog>,
         "...": "...",
       }
@@ -545,16 +549,16 @@ Internet-Draft              remoteStorage                      June 2025
     string value of "GET" if Content-Range headers are supported for
     GET requests as per [RANGE].
 
-    Both these proposals are non-breaking extensions, since the client
-    will have a way to work around it if these features are not present
-    (e.g. retrieve the protected resource asynchronously in the first
-
 
 de Jong                                                        [Page 11]
 
-Internet-Draft              remoteStorage                      June 2025
+Internet-Draft              remoteStorage                      June 2026
 
 
+
+    Both these proposals are non-breaking extensions, since the client
+    will have a way to work around it if these features are not present
+    (e.g. retrieve the protected resource asynchronously in the first
     case, or request the entire resource in the second case).
 
     A "http://remotestorage.io/spec/web-authoring" property has been
@@ -573,6 +577,36 @@ Internet-Draft              remoteStorage                      June 2025
     redirect_uri parameter for unique client identification. See section
     4 of [ORIGIN] for computing the origin.
 
+10.1 Optional PKCE support
+
+    As an optional extension, servers MAY support the OAuth 2.0
+    Authorization Code grant with Proof Key for Code Exchange (PKCE)
+    [PKCE]. If supported, the server MUST advertise the following
+    WebFinger properties on the remoteStorage link:
+
+       * "http://tools.ietf.org/html/rfc6749#section-3.1" with the
+         authorization endpoint URL,
+       * "http://tools.ietf.org/html/rfc6749#section-3.2" with the
+         token endpoint URL,
+       * "http://tools.ietf.org/html/rfc7636" with a string value
+         indicating supported code_challenge method(s). Servers MUST
+         support "S256". Servers SHOULD NOT advertise "plain" unless
+         "S256" is also supported. Clients SHOULD use "S256".
+
+    Clients SHOULD use PKCE when these properties are present;
+    otherwise they SHOULD use the implicit grant as described above.
+    Scope handling, redirect URI origin checks [ORIGIN], and bearer
+    token usage [BEARER] remain unchanged.
+
+
+
+de Jong                                                        [Page 12]
+
+Internet-Draft              remoteStorage                      June 2026
+
+
+    Note: PKCE will be required in protocol versions >= 2.0.
+
 11. Storage-first bearer token issuance
 
     To request that the application connects to the user account
@@ -580,7 +614,7 @@ Internet-Draft              remoteStorage                      June 2025
     'remotestorage' field in the URL fragment, with the user account as
     value.
 
-    The appplication MUST make sure this request is intended by the
+    The application MUST make sure this request is intended by the
     user. It SHOULD ask for confirmation from the user whether they want
     to connect to the given provider account. After confirmation, it
     SHOULD connect to the given provider account, as defined in Section
@@ -598,13 +632,6 @@ Internet-Draft              remoteStorage                      June 2025
 
 12.1. WebFinger
 
-
-
-de Jong                                                        [Page 12]
-
-Internet-Draft              remoteStorage                      June 2025
-
-
     In application-first, an in-browser application might issue the
     following request, using XMLHttpRequest and CORS:
 
@@ -621,6 +648,13 @@ g.com HTTP/1.1
          {
            "links":[{
              "href": "https://michielbdejong.com:7678/inbox",
+
+
+de Jong                                                        [Page 13]
+
+Internet-Draft              remoteStorage                      June 2026
+
+
              "rel": "post-me-anything"
            }, {
              "href": "https://michielbdejong.com/me.jpg",
@@ -631,7 +665,7 @@ g.com HTTP/1.1
 e",
              "properties": {
                "http://remotestorage.io/spec/version": "draft-dejong-re\
-motestorage-25",
+motestorage-27",
                "http://tools.ietf.org/html/rfc6749#section-4.2": "https\
 ://3pp.io:4439/oauth/michiel",
                "http://tools.ietf.org/html/rfc6750#section-2.3": null,
@@ -649,13 +683,6 @@ motestorage-25",
     https://drinks-unhosted.5apps.com/ and wants read-write access to
     the account's "myfavoritedrinks" scope:
 
-
-de Jong                                                        [Page 13]
-
-Internet-Draft              remoteStorage                      June 2025
-
-
-
         GET /oauth/michiel?redirect_uri=https%3A%2F%2Fdrinks-unhosted.5\
 apps.com%2F&scope=myfavoritedrinks%3Arw&client_id=https%3A%2F%2Fdrinks-\
 unhosted.5apps.com&response_type=token HTTP/1.1
@@ -670,6 +697,13 @@ unhosted.5apps.com&response_type=token HTTP/1.1
           <head>
             <title>Allow access?</title>
         ...
+
+
+
+de Jong                                                        [Page 14]
+
+Internet-Draft              remoteStorage                      June 2026
+
 
 12.3. OAuth dialog form submission
 
@@ -698,13 +732,6 @@ low
 
 12.4. OPTIONS preflight
 
-
-
-de Jong                                                        [Page 14]
-
-Internet-Draft              remoteStorage                      June 2025
-
-
     When an in-browser application makes a cross-origin request which
     may affect the server-state, the browser will make a preflight
     request first, with the OPTIONS verb, for instance:
@@ -721,6 +748,13 @@ Internet-Draft              remoteStorage                      June 2025
         HTTP/1.1 200 OK
         Access-Control-Allow-Origin: https://drinks-unhosted.5apps.com
         Access-Control-Allow-Methods: GET, PUT, DELETE
+
+
+de Jong                                                        [Page 15]
+
+Internet-Draft              remoteStorage                      June 2026
+
+
         Access-Control-Allow-Headers: Authorization, Content-Length, Co\
 ntent-Type, Origin, X-Requested-With, If-Match, If-None-Match
 
@@ -748,13 +782,6 @@ ntent-Type, Origin, X-Requested-With, If-Match, If-None-Match
         ETag: "1382694045000"
 
     In case the document already exists on the server, it would respond
-
-
-de Jong                                                        [Page 15]
-
-Internet-Draft              remoteStorage                      June 2025
-
-
     with something like:
 
         HTTP/1.1 412 Precondition Failed
@@ -771,6 +798,13 @@ Internet-Draft              remoteStorage                      June 2025
         Content-Length: 91
         Origin: https://drinks-unhosted.5apps.com
         Authorization: Bearer j2YnGtXjzzzHNjkd1CJxoQubA1o=
+
+
+de Jong                                                        [Page 16]
+
+Internet-Draft              remoteStorage                      June 2026
+
+
         Content-Type: application/json; charset=UTF-8
         Referer: https://drinks-unhosted.5apps.com/
         If-Match: "1382694045000"
@@ -799,13 +833,6 @@ e.io/spec/modules/myfavoritedrinks/drink"}
 
     And the server may respond with a 304 Not Modified status:
 
-
-de Jong                                                        [Page 16]
-
-Internet-Draft              remoteStorage                      June 2025
-
-
-
         HTTP/1.1 304 Not Modified
         Access-Control-Allow-Origin: https://drinks-unhosted.5apps.com
         ETag: "1382694048000"
@@ -821,6 +848,13 @@ Internet-Draft              remoteStorage                      June 2025
 
         {"name":"test", "updated":true, "@context":"http://remotestora\
 ge.io/spec/modules/myfavoritedrinks/drink"}
+
+
+de Jong                                                        [Page 17]
+
+Internet-Draft              remoteStorage                      June 2026
+
+
 
     If the GET URL would have been "/storage/michiel/myfavoritedrinks/",
     a 200 OK response would have a folder description as the response
@@ -849,13 +883,6 @@ charset=UTF-8","Content-Length":106,"Last-Modified":"Sat, 2 Jun 2018 1\
 
     A DELETE request may look like this:
 
-
-de Jong                                                        [Page 17]
-
-Internet-Draft              remoteStorage                      June 2025
-
-
-
         DELETE /storage/michiel/myfavoritedrinks/test HTTP/1.1
         Host: 3pp.io:4439
         Origin: https://drinks-unhosted.5apps.com
@@ -870,6 +897,13 @@ Internet-Draft              remoteStorage                      June 2025
         HTTP/1.1 412 Precondition Failed
         Access-Control-Allow-Origin: https://drinks-unhosted.5apps.com
         ETag: "2182694048000"
+
+
+
+de Jong                                                        [Page 18]
+
+Internet-Draft              remoteStorage                      June 2026
+
 
 
 
@@ -898,13 +932,6 @@ Internet-Draft              remoteStorage                      June 2025
     B may then make a request that puts the document to the version the
     user wishes; this time setting an 'If-Match: "2"' header instead.
 
-
-
-de Jong                                                        [Page 18]
-
-Internet-Draft              remoteStorage                      June 2025
-
-
     Both client A and client B would periodically poll the root
     folder of each scope they have access to, to see if the version
     of the root folder changed. If it did, then one of the versions
@@ -921,6 +948,13 @@ Internet-Draft              remoteStorage                      June 2025
     each of which contain 10 directories, which each contain 10
     documents, so their paths would be for instance '/0/0/1', '/0/0/2',
     etcetera. Then one GET request to the root folder '/' will be
+
+
+de Jong                                                        [Page 19]
+
+Internet-Draft              remoteStorage                      June 2026
+
+
     enough to know if any of these 1000 documents has changed.
 
     Say document '/7/9/2' has changed; then the GET request to '/' will
@@ -949,13 +983,6 @@ Internet-Draft              remoteStorage                      June 2025
     clearly display to which remoteStorage server they are sending the
     user's data.
 
-
-de Jong                                                        [Page 19]
-
-Internet-Draft              remoteStorage                      June 2025
-
-
-
     Applications could request scopes that the user did not intend to
     give access to. The user SHOULD always be prompted to carefully
     review which scopes an application is requesting.
@@ -971,6 +998,13 @@ Internet-Draft              remoteStorage                      June 2025
 
     Where the use of bearer tokens is impractical, a user may choose to
     store documents on hard-to-guess URLs [CAPABILITIES] whose path
+
+
+de Jong                                                        [Page 20]
+
+Internet-Draft              remoteStorage                      June 2026
+
+
     after <storage_root> starts with '/public/', while sharing this URL
     only with the intended audience. That way, only parties who know the
     document's hard-to-guess URL, can access it. The server SHOULD
@@ -984,9 +1018,12 @@ Internet-Draft              remoteStorage                      June 2025
 
     This document registers the following WebFinger properties:
       * "http://remotestorage.io/spec/version"
+      * "http://tools.ietf.org/html/rfc6749#section-3.1"
+      * "http://tools.ietf.org/html/rfc6749#section-3.2"
       * "http://tools.ietf.org/html/rfc6749#section-4.2"
       * "http://tools.ietf.org/html/rfc6750#section-2.3"
       * "http://tools.ietf.org/html/rfc7233"
+      * "http://tools.ietf.org/html/rfc7636"
       * "http://remotestorage.io/spec/web-authoring"
 
 16. Acknowledgements
@@ -995,19 +1032,12 @@ Internet-Draft              remoteStorage                      June 2025
     development of this protocol, including Kenny Bentley, Javier Diaz,
     Daniel Groeber, Bjarni Runar, Jan Wildeboer, Charles Schultz, Peter
     Svensson, Valer Mischenko, Michiel Leenaars, Jan-Christoph
-    Borchardt, Garret Alfert, Sebastian Kippe, Max Wiehle, Melvin
-    Carvalho, Martin Stadler, Geoffroy Couprie, Niklas Cathor, Marco
-    Stahl, James Coglan, Ken Eucker, Daniel Brolund, elf Pavlik, Nick
-
-
-de Jong                                                        [Page 20]
-
-Internet-Draft              remoteStorage                      June 2025
-
-
-    Jennings, Markus Sabadello, Steven te Brinke, Matthias Treydte,
-    Rick van Rein, Mark Nottingham, Julian Reschke, Markus Lanthaler,
-    and Markus Unterwaditzer, among many others.
+    Borchardt, Garret Alfert, Max Wiehle, Melvin Carvalho, Martin
+    Stadler, Geoffroy Couprie, Niklas Cathor, Marco Stahl, James Coglan,
+    Ken Eucker, Daniel Brolund, elf Pavlik, Nick Jennings, Markus
+    Sabadello, Steven te Brinke, Matthias Treydte, Rick van Rein, Mark
+    Nottingham, Julian Reschke, Markus Lanthaler, and Markus
+    Unterwaditzer, among many others.
 
 17. References
 
@@ -1018,6 +1048,13 @@ Internet-Draft              remoteStorage                      June 2025
         Levels", BCP 14, RFC 2119, March 1997.
 
     [IRI]
+
+
+de Jong                                                        [Page 21]
+
+Internet-Draft              remoteStorage                      June 2026
+
+
         Duerst, M., "Internationalized Resource Identifiers (IRIs)",
         RFC 3987, January 2005.
 
@@ -1032,6 +1069,11 @@ Internet-Draft              remoteStorage                      June 2025
     [OAUTH]
         "Section 4.2: Implicit Grant", in: Hardt, D. (ed), "The OAuth
         2.0 Authorization Framework", RFC6749, October 2012.
+
+    [PKCE]
+        Sakimura, N. (ed), Bradley, J., and Agarwal, N., "Proof Key
+        for Code Exchange by OAuth Public Clients", RFC 7636,
+        September 2015.
 
     [ORIGIN]
         "Section 4: Origin of a URI", in: Barth, A., "The Web Origin
@@ -1048,13 +1090,6 @@ Internet-Draft              remoteStorage                      June 2025
 
     [COND]
         Fielding et al., "Hypertext Transfer Protocol (HTTP/1.1):
-
-
-de Jong                                                        [Page 21]
-
-Internet-Draft              remoteStorage                      June 2025
-
-
         Conditional Requests", RFC7232, June 2014.
 
     [RANGE]
@@ -1063,6 +1098,13 @@ Internet-Draft              remoteStorage                      June 2025
 
     [HTTP/2]
         M. Belshe, R. Peon, M. Thomson, Ed. "Hypertext Transfer Protocol
+
+
+de Jong                                                        [Page 22]
+
+Internet-Draft              remoteStorage                      June 2026
+
+
         Version 2 (HTTP/2)", RFC7540, May 2015.
 
     [JSON-LD]
@@ -1100,17 +1142,17 @@ Internet-Draft              remoteStorage                      June 2025
     Email: michiel@unhosted.org
 
 
-de Jong                                                        [Page 22]
-
-Internet-Draft              remoteStorage                      June 2025
-
-
-
-
     F. Kooman
     (independent)
 
     Email: fkooman@tuxed.net
+
+
+
+
+de Jong                                                        [Page 23]
+
+Internet-Draft              remoteStorage                      June 2026
 
 
     S. Kippe
@@ -1150,4 +1192,12 @@ Internet-Draft              remoteStorage                      June 2025
 
 
 
-de Jong                                                        [Page 23]
+
+
+
+
+
+
+
+
+de Jong                                                        [Page 24]
