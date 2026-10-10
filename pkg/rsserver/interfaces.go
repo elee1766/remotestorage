@@ -8,40 +8,60 @@ import (
 	"anime.bike/remotestorage/pkg/rs"
 )
 
-// StorageBackend defines the interface for RemoteStorage backend implementations
-type StorageBackend interface {
-	// Get retrieves a document or folder listing
-	Get(ctx context.Context, path string) (*rs.Document, *rs.FolderListing, error)
-
-	// Create stores a new document (returns error if already exists)
-	Create(ctx context.Context, path string, body io.Reader, contentType string) (etag string, err error)
-
-	// Update modifies an existing document (returns error if doesn't exist or etag mismatch)
-	Update(ctx context.Context, path string, body io.Reader, contentType string, etag string) (newETag string, err error)
-
-	// Delete removes a document
-	Delete(ctx context.Context, path string, etag string) error
-
-	// Head retrieves document metadata
-	Head(ctx context.Context, path string) (*rs.Metadata, error)
+// Condition is a precondition on a write, taken from If-Match / If-None-Match.
+// ETags are unquoted.
+type Condition struct {
+	// IfMatch, if non-empty, requires the current document version to be one of these.
+	IfMatch []string
+	// IfNoneMatchAny requires that the document does not exist (If-None-Match: *).
+	IfNoneMatchAny bool
 }
 
-// StorageBackendRange is an optional interface for storage backends that support range requests
-type StorageBackendRange interface {
-	// GetRange retrieves a document with a specific byte range
-	// If start is -1, it means "last N bytes" where end is the number of bytes
-	// If end is -1, it means "from start to end of file"
-	GetRange(ctx context.Context, path string, start, end int64) (*rs.Document, error)
+// PutResult is returned by StorageBackend.Put.
+type PutResult struct {
+	ETag    string
+	Created bool
+}
+
+// StorageBackend stores one user's tree of documents and folders.
+//
+// Paths start with "/" and are relative to the user's storage root; folder
+// paths end in "/". The handler validates paths before calling the backend.
+//
+// Backends must implement the storage model of the spec:
+//   - a folder exists iff its subtree contains at least one document,
+//   - every write changes the ETag of the document and of all ancestor folders,
+//   - a document and a folder with the same name cannot coexist (ErrConflict),
+//   - conditions are checked atomically with the write.
+type StorageBackend interface {
+	// Get returns a document or a folder listing. For a folder that does not
+	// exist, it returns an empty listing (not ErrNotFound). If the document
+	// body implements io.Seeker, the server can serve Range requests.
+	Get(ctx context.Context, path string) (*rs.Document, *rs.FolderListing, error)
+
+	// Head returns metadata of a document or folder. For a missing document
+	// it returns ErrNotFound; for a missing folder it returns metadata with
+	// an empty ETag.
+	Head(ctx context.Context, path string) (*rs.Metadata, error)
+
+	// Put creates or replaces a document. size is -1 when unknown.
+	// Errors: ErrPreconditionFailed, ErrConflict, ErrTooLarge, ErrQuotaExceeded.
+	Put(ctx context.Context, path string, body io.Reader, size int64, contentType string, cond Condition) (*PutResult, error)
+
+	// Delete removes a document and returns the ETag it had.
+	// Errors: ErrNotFound, ErrPreconditionFailed.
+	Delete(ctx context.Context, path string, cond Condition) (etag string, err error)
 }
 
 // ResourceResolver extracts resource location information from HTTP request URLs
 // This allows different implementations to support different URL structures:
-// - Path-based: /{username}/{module}/{path}
-// - Subdomain: https://{user}.example.com/{module}/{path}
-// - Token-only (single tenant): /{module}/{path}
+// - Path-based: /{username}/{path}
+// - Subdomain: https://{user}.example.com/{path}
+// - Token-only (single tenant): /{path}
 type ResourceResolver interface {
-	// ResolveResource extracts the resource location from the HTTP request URL
-	// Returns what resource is being accessed (user, module, path, public namespace)
+	// ResolveResource returns the user and the storage path of the request.
+	// Path must keep its trailing "/" for folders. Module and IsPublic may be
+	// left empty; the handler fills them from Path.
 	ResolveResource(r *http.Request) (*ResourceRef, error)
 }
 
@@ -68,9 +88,9 @@ type Authorizer interface {
 	Authorize(authInfo *AuthInfo, req *ResourceRequest) error
 }
 
-// StorageProvider returns storage backends for authenticated users
+// StorageProvider returns the storage of the user named in the request.
+// For public reads authInfo is nil, so the provider must use
+// req.Resource.RequestedUser, not authInfo, to pick the storage.
 type StorageProvider interface {
-	// GetStorage returns storage backend for the authenticated user and resource request
-	// The request context should contain AuthInfo from Authenticate
 	GetStorage(ctx context.Context, authInfo *AuthInfo, req *ResourceRequest) (StorageBackend, error)
 }

@@ -75,9 +75,7 @@ func main() {
 		WithAuthenticator(NewSimpleAuthenticator(oauthProvider)).
 		WithAuthorizer(rsserver.NewScopeCheckingAuthorizer()).
 		WithStorageProvider(NewSimpleStorageProvider()).
-		WithHooks(rsserver.ServerHooks{
-			BeforeWrite: fileSizeLimitHook(config.MaxFileSize),
-		}).
+		WithMaxDocumentSize(config.MaxFileSize).
 		MustBuild()
 
 	// Setup routes

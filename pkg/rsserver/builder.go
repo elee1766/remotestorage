@@ -12,13 +12,14 @@ type Builder struct {
 	authorizer       Authorizer
 	storageProvider  StorageProvider
 	hooks            ServerHooks
+	maxDocumentSize  int64
+	queryToken       bool
+	errorLog         func(r *http.Request, err error)
 }
 
 // NewBuilder creates a new Builder
 func NewBuilder() *Builder {
-	return &Builder{
-		hooks: ServerHooks{}, // Always initialized
-	}
+	return &Builder{}
 }
 
 // WithResourceResolver sets the resource resolver
@@ -51,10 +52,30 @@ func (b *Builder) WithHooks(h ServerHooks) *Builder {
 	return b
 }
 
+// WithMaxDocumentSize rejects documents larger than n bytes with 413. 0 means no limit.
+func (b *Builder) WithMaxDocumentSize(n int64) *Builder {
+	b.maxDocumentSize = n
+	return b
+}
+
+// WithQueryToken accepts the bearer token in the access_token query
+// parameter on GET requests (RFC 6750 section 2.3). Advertise it in WebFinger
+// when enabled.
+func (b *Builder) WithQueryToken(enabled bool) *Builder {
+	b.queryToken = enabled
+	return b
+}
+
+// WithErrorLog sets the function called for unexpected (500) errors.
+// The default logs with slog.
+func (b *Builder) WithErrorLog(f func(r *http.Request, err error)) *Builder {
+	b.errorLog = f
+	return b
+}
+
 // Build creates and returns a Handler
 // Returns an error if required components are missing
 func (b *Builder) Build() (*Handler, error) {
-	// Validate required components
 	if b.resourceResolver == nil {
 		return nil, fmt.Errorf("ResourceResolver is required")
 	}
@@ -67,23 +88,22 @@ func (b *Builder) Build() (*Handler, error) {
 	if b.storageProvider == nil {
 		return nil, fmt.Errorf("StorageProvider is required")
 	}
-
 	h := &Handler{
 		resourceResolver: b.resourceResolver,
 		authenticator:    b.authenticator,
 		authorizer:       b.authorizer,
 		storageProvider:  b.storageProvider,
 		hooks:            b.hooks,
+		maxDocumentSize:  b.maxDocumentSize,
+		queryToken:       b.queryToken,
+		errorLog:         b.errorLog,
 		mux:              http.NewServeMux(),
 	}
-
 	h.registerRoutes()
-
 	return h, nil
 }
 
 // MustBuild creates and returns a Handler, panicking if there's an error
-// Use this when you're confident all required components are set
 func (b *Builder) MustBuild() *Handler {
 	handler, err := b.Build()
 	if err != nil {

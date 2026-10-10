@@ -1,483 +1,374 @@
+// Package rsstorage_filesystem stores remoteStorage documents in a directory tree.
+//
+// Layout under the root directory:
+//
+//	data/<path>   document contents
+//	meta/<path>   document metadata (JSON), mirroring data/
+//	tmp/          files being written
+//
+// Folder ETags are derived from the ETags of their children, so they change
+// whenever any document in the subtree changes. Computing them walks the
+// subtree, which is fine for small trees. Writes are serialized with a mutex,
+// so one Storage must not be shared between processes.
 package rsstorage_filesystem
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"anime.bike/remotestorage/pkg/rs"
+	"anime.bike/remotestorage/pkg/rsserver"
 	"github.com/spf13/afero"
 )
 
-// FilesystemStorage implements storage using an afero.Fs filesystem
-type FilesystemStorage struct {
+// Storage is a StorageBackend for one user, rooted at a directory.
+type Storage struct {
 	fs   afero.Fs
 	root string
+	mu   sync.RWMutex
 }
 
-// NewFilesystemStorage creates a new filesystem storage backend
-func NewFilesystemStorage(fs afero.Fs, rootDir string) *FilesystemStorage {
-	return &FilesystemStorage{
-		fs:   fs,
-		root: rootDir,
+var _ rsserver.StorageBackend = (*Storage)(nil)
+
+// New creates a storage in root on fs.
+func New(fsys afero.Fs, root string) *Storage {
+	return &Storage{fs: fsys, root: root}
+}
+
+// NewOS creates a storage in a directory of the OS filesystem.
+func NewOS(root string) *Storage { return New(afero.NewOsFs(), root) }
+
+// NewMemory creates a storage on an in-memory filesystem.
+func NewMemory() *Storage { return New(afero.NewMemMapFs(), "/") }
+
+type docMeta struct {
+	ContentType string    `json:"content_type"`
+	ETag        string    `json:"etag"`
+	Size        int64     `json:"size"`
+	Modified    time.Time `json:"modified"`
+}
+
+func (s *Storage) dataPath(p string) string {
+	return filepath.Join(s.root, "data", filepath.FromSlash(p))
+}
+func (s *Storage) metaPath(p string) string {
+	return filepath.Join(s.root, "meta", filepath.FromSlash(p))
+}
+
+func (s *Storage) readMeta(p string) (*docMeta, error) {
+	// Only a regular file in the data tree is a document. A directory, or a
+	// path under a document, is not.
+	if !s.isFile(p) {
+		return nil, rs.ErrNotFound
 	}
-}
-
-// NewOSFilesystemStorage creates a filesystem storage using the OS filesystem
-func NewOSFilesystemStorage(rootDir string) *FilesystemStorage {
-	return NewFilesystemStorage(afero.NewOsFs(), rootDir)
-}
-
-// NewMemoryFilesystemStorage creates a filesystem storage using in-memory filesystem
-func NewMemoryFilesystemStorage() *FilesystemStorage {
-	return NewFilesystemStorage(afero.NewMemMapFs(), "/")
-}
-
-// fileMetadata represents metadata stored alongside files
-type fileMetadata struct {
-	ContentType  string    `json:"content_type"`
-	ETag         string    `json:"etag"`
-	LastModified time.Time `json:"last_modified"`
-	Size         int64     `json:"size"`
-}
-
-// Get retrieves a document or folder listing
-func (fs *FilesystemStorage) Get(ctx context.Context, path string) (*rs.Document, *rs.FolderListing, error) {
-	fullPath := fs.buildPath(path)
-
-	// Check if path exists and determine type
-	info, err := fs.fs.Stat(fullPath)
+	b, err := afero.ReadFile(s.fs, s.metaPath(p))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, rs.ErrNotFound
+	}
 	if err != nil {
-		return nil, nil, rs.ErrNotFound
+		return nil, err
 	}
-
-	if !info.IsDir() {
-		return fs.getDocument(path, fullPath)
+	var m docMeta
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
 	}
-	return fs.getFolderListing(path, fullPath)
+	return &m, nil
 }
 
-// Create stores a new document
-func (fs *FilesystemStorage) Create(ctx context.Context, path string, body io.Reader, contentType string) (string, error) {
-	fullPath := fs.buildPath(path)
-
-	// Check if file already exists
-	if exists, _ := afero.Exists(fs.fs, fullPath); exists {
-		return "", rs.ErrAlreadyExists
-	}
-
-	return fs.writeFile(fullPath, body, contentType)
+func (m *docMeta) metadata(p string) rs.Metadata {
+	return rs.Metadata{Path: p, Name: rs.BaseName(p), ContentType: m.ContentType, ETag: m.ETag, Size: m.Size, LastModified: m.Modified}
 }
 
-// Update modifies an existing document
-func (fs *FilesystemStorage) Update(ctx context.Context, path string, body io.Reader, contentType string, etag string) (string, error) {
-	fullPath := fs.buildPath(path)
+// isDir reports whether the data tree has a directory at folder path p.
+func (s *Storage) isDir(p string) bool {
+	fi, err := s.fs.Stat(s.dataPath(p))
+	return err == nil && fi.IsDir()
+}
 
-	// Check if file exists
-	exists, err := afero.Exists(fs.fs, fullPath)
+func (s *Storage) isFile(p string) bool {
+	fi, err := s.fs.Stat(s.dataPath(p))
+	return err == nil && fi.Mode().IsRegular()
+}
+
+// listDir returns child names of folder p, folders with a trailing "/".
+func (s *Storage) listDir(p string) ([]string, error) {
+	infos, err := afero.ReadDir(s.fs, s.dataPath(p))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(infos))
+	for _, fi := range infos {
+		if fi.IsDir() {
+			names = append(names, fi.Name()+"/")
+		} else {
+			names = append(names, fi.Name())
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// folderETag hashes the names and ETags of all children. Empty folders have "".
+func (s *Storage) folderETag(p string) (string, error) {
+	names, err := s.listDir(p)
+	if err != nil || len(names) == 0 {
 		return "", err
 	}
-	if !exists {
-		return "", rs.ErrNotFound
-	}
-
-	// Check etag if provided
-	if etag != "" {
-		currentMeta, err := fs.readMetadata(fullPath)
+	h := sha256.New()
+	for _, n := range names {
+		var etag string
+		if strings.HasSuffix(n, "/") {
+			etag, err = s.folderETag(p + n)
+		} else {
+			var m *docMeta
+			m, err = s.readMeta(p + n)
+			if m != nil {
+				etag = m.ETag
+			}
+		}
 		if err != nil {
 			return "", err
 		}
-		if currentMeta.ETag != etag {
-			return "", rs.ErrPreconditionFailed
-		}
+		h.Write([]byte(n + "\x00" + etag + "\x00"))
 	}
-
-	return fs.writeFile(fullPath, body, contentType)
+	return hex.EncodeToString(h.Sum(nil))[:32], nil
 }
 
-// Delete removes a document
-func (fs *FilesystemStorage) Delete(ctx context.Context, path string, etag string) error {
-	fullPath := fs.buildPath(path)
-
-	// Check if file exists
-	exists, err := afero.Exists(fs.fs, fullPath)
-	if err != nil {
-		return err
+func (s *Storage) Get(_ context.Context, p string) (*rs.Document, *rs.FolderListing, error) {
+	if err := rs.ValidatePath(p); err != nil {
+		return nil, nil, err
 	}
-	if !exists {
-		return rs.ErrNotFound
-	}
-
-	// Check etag if provided
-	if etag != "" {
-		currentMeta, err := fs.readMetadata(fullPath)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !rs.IsFolderPath(p) {
+		m, err := s.readMeta(p)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
-		if currentMeta.ETag != etag {
-			return rs.ErrPreconditionFailed
+		f, err := s.fs.Open(s.dataPath(p))
+		if err != nil {
+			return nil, nil, err
 		}
+		return &rs.Document{Metadata: m.metadata(p), Body: f}, nil, nil
 	}
-
-	// Remove file and metadata
-	if err := fs.fs.Remove(fullPath); err != nil {
-		return err
-	}
-
-	metaPath := fs.getMetadataPath(fullPath)
-	fs.fs.Remove(metaPath) // Ignore error for metadata removal
-
-	// Clean up empty directories
-	fs.cleanupEmptyDirs(filepath.Dir(fullPath))
-
-	return nil
-}
-
-// Head retrieves document metadata
-func (fs *FilesystemStorage) Head(ctx context.Context, path string) (*rs.Metadata, error) {
-	fullPath := fs.buildPath(path)
-
-	info, err := fs.fs.Stat(fullPath)
-	if err != nil || info.IsDir() {
-		return nil, rs.ErrNotFound
-	}
-
-	meta, err := fs.readMetadata(fullPath)
-	if err != nil {
-		return nil, err
-	}
-
-	return &rs.Metadata{
-		Path:         path,
-		Name:         fs.pathName(path),
-		ContentType:  meta.ContentType,
-		ETag:         meta.ETag,
-		LastModified: meta.LastModified,
-		Size:         meta.Size,
-		IsFolder:     false,
-	}, nil
-}
-
-// GetRange retrieves a document with a specific byte range
-func (fs *FilesystemStorage) GetRange(ctx context.Context, path string, start, end int64) (*rs.Document, error) {
-	fullPath := fs.buildPath(path)
-
-	info, err := fs.fs.Stat(fullPath)
-	if err != nil || info.IsDir() {
-		return nil, rs.ErrNotFound
-	}
-
-	meta, err := fs.readMetadata(fullPath)
-	if err != nil {
-		return nil, err
-	}
-
-	// Handle special cases for start and end
-	if start == -1 {
-		// Last N bytes case: start = -1, end = number of bytes
-		if end > meta.Size {
-			end = meta.Size
-		}
-		start = meta.Size - end
-		end = meta.Size - 1
-	} else if end == -1 {
-		// From start to end of file
-		end = meta.Size - 1
-	}
-
-	// Validate range
-	if start < 0 || start >= meta.Size || end < start || end >= meta.Size {
-		return nil, fmt.Errorf("invalid range: start=%d, end=%d, content_length=%d", start, end, meta.Size)
-	}
-
-	// Open file and seek to start position
-	file, err := fs.fs.Open(fullPath)
-	if err != nil {
-		return nil, err
-	}
-
-	// Create a reader that only reads the requested range
-	seeker, ok := file.(io.Seeker)
-	if !ok {
-		file.Close()
-		return nil, fmt.Errorf("file does not support seeking")
-	}
-
-	if _, err := seeker.Seek(start, io.SeekStart); err != nil {
-		file.Close()
-		return nil, err
-	}
-
-	rangeSize := end - start + 1
-	limitedReader := io.LimitReader(file, rangeSize)
-
-	return &rs.Document{
-		Metadata: rs.Metadata{
-			Path:         path,
-			Name:         fs.pathName(path),
-			ContentType:  meta.ContentType,
-			ETag:         meta.ETag,
-			LastModified: meta.LastModified,
-			Size:         rangeSize,
-			IsFolder:     false,
-		},
-		Body: &fileCloser{Reader: limitedReader, file: file},
-	}, nil
-}
-
-// Helper methods
-
-func (fs *FilesystemStorage) buildPath(path string) string {
-	// Ensure path starts with /
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	return filepath.Join(fs.root, path)
-}
-
-func (fs *FilesystemStorage) pathName(p string) string {
-	name := filepath.Base(p)
-	if name == "/" || name == "." {
-		return ""
-	}
-	return name
-}
-
-func (fs *FilesystemStorage) getMetadataPath(filePath string) string {
-	return filePath + ".meta"
-}
-
-func (fs *FilesystemStorage) getDocument(path, fullPath string) (*rs.Document, *rs.FolderListing, error) {
-	meta, err := fs.readMetadata(fullPath)
+	etag, err := s.folderETag(p)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	file, err := fs.fs.Open(fullPath)
+	listing := rs.NewFolderListing(rs.Metadata{Path: p, Name: rs.BaseName(p), ETag: etag, IsFolder: true})
+	names, err := s.listDir(p)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	return &rs.Document{
-		Metadata: rs.Metadata{
-			Path:         path,
-			Name:         fs.pathName(path),
-			ContentType:  meta.ContentType,
-			ETag:         meta.ETag,
-			LastModified: meta.LastModified,
-			Size:         meta.Size,
-			IsFolder:     false,
-		},
-		Body: file,
-	}, nil, nil
-}
-
-func (fs *FilesystemStorage) getFolderListing(path, fullPath string) (*rs.Document, *rs.FolderListing, error) {
-	files, err := afero.ReadDir(fs.fs, fullPath)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	items := make(map[string]rs.FolderItem)
-
-	for _, file := range files {
-		fileName := file.Name()
-
-		// Skip metadata files
-		if strings.HasSuffix(fileName, ".meta") {
+	for _, n := range names {
+		if strings.HasSuffix(n, "/") {
+			fe, err := s.folderETag(p + n)
+			if err != nil {
+				return nil, nil, err
+			}
+			listing.Items[n] = rs.FolderEntry(fe)
 			continue
 		}
-
-		if file.IsDir() {
-			// Directory entry
-			items[fileName+"/"] = rs.FolderItem{
-				ETag: "", // Directories don't have meaningful ETags in this implementation
-			}
-		} else {
-			// File entry
-			filePath := filepath.Join(fullPath, fileName)
-			meta, err := fs.readMetadata(filePath)
-			if err != nil {
-				// If we can't read metadata, create basic entry
-				items[fileName] = rs.FolderItem{
-					ETag:          fs.generateEtagFromFileInfo(file),
-					ContentType:   "application/octet-stream",
-					ContentLength: file.Size(),
-					LastModified:  file.ModTime().Format(time.RFC1123),
-				}
-			} else {
-				items[fileName] = rs.FolderItem{
-					ETag:          meta.ETag,
-					ContentType:   meta.ContentType,
-					ContentLength: meta.Size,
-					LastModified:  meta.LastModified.Format(time.RFC1123),
-				}
-			}
+		m, err := s.readMeta(p + n)
+		if err != nil {
+			return nil, nil, err
 		}
+		listing.Items[n] = rs.DocumentItem(m.metadata(p + n))
 	}
-
-	// Calculate folder ETag
-	folderEtag := fs.calculateFolderEtag(items)
-
-	listing := &rs.FolderListing{
-		LDContext: rs.GetFolderListingContext(),
-		Metadata: rs.Metadata{
-			Path:     path,
-			Name:     fs.pathName(path),
-			ETag:     folderEtag,
-			IsFolder: true,
-		},
-		Items: items,
-	}
-
 	return nil, listing, nil
 }
 
-func (fs *FilesystemStorage) writeFile(fullPath string, body io.Reader, contentType string) (string, error) {
-	// Ensure parent directory exists
-	if err := fs.fs.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
-		return "", err
-	}
-
-	// Read content to calculate ETag and size
-	content, err := io.ReadAll(body)
-	if err != nil {
-		return "", err
-	}
-
-	// Generate ETag
-	etag := fs.generateEtag(content)
-
-	// Write file
-	if err := afero.WriteFile(fs.fs, fullPath, content, 0644); err != nil {
-		return "", err
-	}
-
-	// Write metadata
-	meta := fileMetadata{
-		ContentType:  contentType,
-		ETag:         etag,
-		LastModified: time.Now(),
-		Size:         int64(len(content)),
-	}
-
-	if err := fs.writeMetadata(fullPath, meta); err != nil {
-		// If metadata write fails, remove the file and return error
-		fs.fs.Remove(fullPath)
-		return "", err
-	}
-
-	return etag, nil
-}
-
-func (fs *FilesystemStorage) readMetadata(filePath string) (*fileMetadata, error) {
-	metaPath := fs.getMetadataPath(filePath)
-
-	data, err := afero.ReadFile(fs.fs, metaPath)
-	if err != nil {
-		// If metadata doesn't exist, try to create it from file info
-		return fs.createMetadataFromFile(filePath)
-	}
-
-	var meta fileMetadata
-	if err := json.Unmarshal(data, &meta); err != nil {
+func (s *Storage) Head(_ context.Context, p string) (*rs.Metadata, error) {
+	if err := rs.ValidatePath(p); err != nil {
 		return nil, err
 	}
-
-	return &meta, nil
-}
-
-func (fs *FilesystemStorage) writeMetadata(filePath string, meta fileMetadata) error {
-	metaPath := fs.getMetadataPath(filePath)
-
-	data, err := json.Marshal(meta)
-	if err != nil {
-		return err
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if rs.IsFolderPath(p) {
+		etag, err := s.folderETag(p)
+		if err != nil {
+			return nil, err
+		}
+		return &rs.Metadata{Path: p, Name: rs.BaseName(p), ETag: etag, IsFolder: true}, nil
 	}
-
-	return afero.WriteFile(fs.fs, metaPath, data, 0644)
-}
-
-func (fs *FilesystemStorage) createMetadataFromFile(filePath string) (*fileMetadata, error) {
-	info, err := fs.fs.Stat(filePath)
+	m, err := s.readMeta(p)
 	if err != nil {
 		return nil, err
 	}
+	md := m.metadata(p)
+	return &md, nil
+}
 
-	// Read file to calculate ETag
-	content, err := afero.ReadFile(fs.fs, filePath)
+// conflicts reports whether a document at p would clash with a folder of the
+// same name or with a document used as an ancestor folder.
+func (s *Storage) conflicts(p string) bool {
+	if s.isDir(p + "/") {
+		return true
+	}
+	for dir := rs.ParentPath(p); dir != "/" && dir != ""; dir = rs.ParentPath(dir) {
+		if s.isFile(strings.TrimSuffix(dir, "/")) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Storage) writeTemp(r io.Reader) (name string, size int64, sum []byte, err error) {
+	tmpDir := filepath.Join(s.root, "tmp")
+	if err := s.fs.MkdirAll(tmpDir, 0o755); err != nil {
+		return "", 0, nil, err
+	}
+	var rnd [16]byte
+	rand.Read(rnd[:])
+	name = filepath.Join(tmpDir, hex.EncodeToString(rnd[:]))
+	f, err := s.fs.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
-		return nil, err
+		return "", 0, nil, err
 	}
-
-	meta := &fileMetadata{
-		ContentType:  "application/octet-stream", // Default content type
-		ETag:         fs.generateEtag(content),
-		LastModified: info.ModTime(),
-		Size:         info.Size(),
-	}
-
-	// Try to write metadata for future use
-	fs.writeMetadata(filePath, *meta)
-
-	return meta, nil
-}
-
-func (fs *FilesystemStorage) generateEtag(content []byte) string {
-	hash := sha256.Sum256(content)
-	return hex.EncodeToString(hash[:])[:16]
-}
-
-func (fs *FilesystemStorage) generateEtagFromFileInfo(info os.FileInfo) string {
-	// Simple etag based on file size and modification time
-	data := fmt.Sprintf("%d-%d", info.Size(), info.ModTime().Unix())
-	hash := sha256.Sum256([]byte(data))
-	return hex.EncodeToString(hash[:])[:16]
-}
-
-func (fs *FilesystemStorage) calculateFolderEtag(items map[string]rs.FolderItem) string {
 	h := sha256.New()
-	for name, item := range items {
-		h.Write([]byte(name))
-		h.Write([]byte(item.ETag))
+	size, err = io.Copy(io.MultiWriter(f, h), r)
+	if cerr := f.Close(); err == nil {
+		err = cerr
 	}
-	return hex.EncodeToString(h.Sum(nil))[:16]
-}
-
-func (fs *FilesystemStorage) cleanupEmptyDirs(dirPath string) {
-	// Don't remove the root directory
-	if dirPath == fs.root || dirPath == "/" {
-		return
-	}
-
-	// Check if directory is empty
-	files, err := afero.ReadDir(fs.fs, dirPath)
 	if err != nil {
-		return
+		s.fs.Remove(name)
+		return "", 0, nil, err
 	}
-
-	if len(files) == 0 {
-		// Directory is empty, remove it
-		fs.fs.Remove(dirPath)
-		// Recursively check parent
-		fs.cleanupEmptyDirs(filepath.Dir(dirPath))
-	}
+	return name, size, h.Sum(nil), nil
 }
 
-// fileCloser wraps a reader and ensures the underlying file is closed
-type fileCloser struct {
-	io.Reader
-	file afero.File
+func (s *Storage) Put(_ context.Context, p string, body io.Reader, _ int64, contentType string, cond rsserver.Condition) (*rsserver.PutResult, error) {
+	if err := rs.ValidatePath(p); err != nil || rs.IsFolderPath(p) {
+		return nil, rs.ErrInvalidPath
+	}
+	// Stream the body to a temp file before taking the lock.
+	tmp, size, sum, err := s.writeTemp(body)
+	if err != nil {
+		return nil, err
+	}
+	defer s.fs.Remove(tmp)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	old, err := s.readMeta(p)
+	if err != nil && !errors.Is(err, rs.ErrNotFound) {
+		return nil, err
+	}
+	var cur string
+	if old != nil {
+		cur = old.ETag
+	}
+	if err := cond.Check(old != nil, cur); err != nil {
+		return nil, err
+	}
+	if s.conflicts(p) {
+		return nil, rs.ErrConflict
+	}
+	h := sha256.New()
+	h.Write(sum)
+	h.Write([]byte(contentType))
+	meta := docMeta{
+		ContentType: contentType,
+		ETag:        hex.EncodeToString(h.Sum(nil))[:32],
+		Size:        size,
+		Modified:    time.Now().UTC().Truncate(time.Second),
+	}
+	metaJSON, _ := json.Marshal(meta)
+	for _, dir := range []string{filepath.Dir(s.dataPath(p)), filepath.Dir(s.metaPath(p))} {
+		if err := s.fs.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+	}
+	if err := s.fs.Rename(tmp, s.dataPath(p)); err != nil {
+		return nil, err
+	}
+	if err := afero.WriteFile(s.fs, tmp, metaJSON, 0o644); err != nil {
+		return nil, err
+	}
+	if err := s.fs.Rename(tmp, s.metaPath(p)); err != nil {
+		return nil, err
+	}
+	return &rsserver.PutResult{ETag: meta.ETag, Created: old == nil}, nil
 }
 
-func (fc *fileCloser) Close() error {
-	return fc.file.Close()
+func (s *Storage) Delete(_ context.Context, p string, cond rsserver.Condition) (string, error) {
+	if err := rs.ValidatePath(p); err != nil || rs.IsFolderPath(p) {
+		return "", rs.ErrInvalidPath
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, err := s.readMeta(p)
+	if err != nil && !errors.Is(err, rs.ErrNotFound) {
+		return "", err
+	}
+	var cur string
+	if m != nil {
+		cur = m.ETag
+	}
+	if err := cond.Check(m != nil, cur); err != nil {
+		return "", err
+	}
+	if m == nil {
+		return "", rs.ErrNotFound
+	}
+	if err := s.fs.Remove(s.dataPath(p)); err != nil {
+		return "", err
+	}
+	if err := s.fs.Remove(s.metaPath(p)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	// Remove folders left empty, in both trees.
+	for dir := rs.ParentPath(p); dir != "/" && dir != ""; dir = rs.ParentPath(dir) {
+		names, err := s.listDir(dir)
+		if err != nil || len(names) > 0 {
+			break
+		}
+		s.fs.Remove(s.dataPath(dir))
+		s.fs.Remove(s.metaPath(dir))
+	}
+	return m.ETag, nil
+}
+
+// Multi stores each user in a subdirectory of root.
+type Multi struct {
+	fs    afero.Fs
+	root  string
+	mu    sync.Mutex
+	users map[string]*Storage
+}
+
+// NewMulti creates per-user storages under root.
+func NewMulti(fsys afero.Fs, root string) *Multi {
+	return &Multi{fs: fsys, root: root, users: map[string]*Storage{}}
+}
+
+// User returns the storage of user. user must be a single path segment.
+func (m *Multi) User(user string) (*Storage, error) {
+	if user == "" || user == "." || user == ".." || strings.ContainsAny(user, "/\\\x00") {
+		return nil, rs.ErrInvalidPath
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.users[user]
+	if !ok {
+		s = New(m.fs, path.Join(m.root, user))
+		m.users[user] = s
+	}
+	return s, nil
 }

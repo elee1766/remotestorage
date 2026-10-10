@@ -1,7 +1,9 @@
 package rs
 
 import (
+	"encoding/json"
 	"io"
+	"net/http"
 	"time"
 )
 
@@ -13,9 +15,10 @@ type StorageInfo struct {
 	DiscoveryURL string                 `json:"discovery_url,omitempty"`
 }
 
-// Metadata represents document or folder metadata
+// Metadata describes a document or folder.
+// ETag values never include the surrounding double quotes.
 type Metadata struct {
-	Path         string // Full path including name
+	Path         string // Full path including name. Folder paths end in "/".
 	Name         string // Just the item name
 	ContentType  string
 	ETag         string
@@ -24,40 +27,68 @@ type Metadata struct {
 	IsFolder     bool
 }
 
-// Document represents a document in RemoteStorage
+// Document represents a document in RemoteStorage.
+// If Body implements io.Seeker the server can answer Range requests.
 type Document struct {
 	Metadata Metadata
 	Body     io.ReadCloser
 }
 
-// FolderListing represents a folder's contents in JSON-LD format
+// FolderListing is the JSON-LD folder description returned for folder GETs.
 type FolderListing struct {
 	LDContext interface{}           `json:"@context"`
 	Metadata  Metadata              `json:"-"`
 	Items     map[string]FolderItem `json:"items"`
 }
 
-// FolderItem represents an item in a folder listing
+// FolderItem is one entry of a folder listing. Documents carry all four
+// fields; folders (names ending in "/") carry only ETag.
 type FolderItem struct {
-	ETag          string `json:"ETag,omitempty"`
+	ETag          string `json:"ETag"`
 	ContentType   string `json:"Content-Type,omitempty"`
 	ContentLength int64  `json:"Content-Length,omitempty"`
 	LastModified  string `json:"Last-Modified,omitempty"`
+	// IsFolder selects the folder description encoding.
+	IsFolder bool `json:"-"`
 }
 
-// Scope represents an access scope for RemoteStorage
-type Scope struct {
-	Module string
-	Access AccessLevel
+// MarshalJSON always emits Content-Length for documents, including 0.
+func (f FolderItem) MarshalJSON() ([]byte, error) {
+	if f.IsFolder {
+		return json.Marshal(struct {
+			ETag string `json:"ETag"`
+		}{f.ETag})
+	}
+	return json.Marshal(struct {
+		ETag          string `json:"ETag"`
+		ContentType   string `json:"Content-Type"`
+		ContentLength int64  `json:"Content-Length"`
+		LastModified  string `json:"Last-Modified"`
+	}{f.ETag, f.ContentType, f.ContentLength, f.LastModified})
 }
 
-// AccessLevel represents read or read/write access
-type AccessLevel string
+// DocumentItem builds the folder listing entry for a document.
+func DocumentItem(m Metadata) FolderItem {
+	return FolderItem{
+		ETag:          m.ETag,
+		ContentType:   m.ContentType,
+		ContentLength: m.Size,
+		LastModified:  FormatHTTPDate(m.LastModified),
+	}
+}
 
-const (
-	ReadAccess      AccessLevel = "r"
-	ReadWriteAccess AccessLevel = "rw"
-)
+// FolderEntry builds the folder listing entry for a subfolder.
+func FolderEntry(etag string) FolderItem {
+	return FolderItem{ETag: etag, IsFolder: true}
+}
+
+// FormatHTTPDate formats t as an HTTP-date (RFC 9110 section 5.6.7).
+func FormatHTTPDate(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(http.TimeFormat)
+}
 
 // VersionName represents a RemoteStorage protocol version
 type VersionName string
@@ -67,46 +98,12 @@ const (
 	RemoteStorageRel = "http://tools.ietf.org/id/draft-dejong-remotestorage"
 	PublicModule     = "public"
 
+	// FolderDescriptionContext is the required @context of folder listings.
+	FolderDescriptionContext = "http://remotestorage.io/spec/folder-description"
+
 	// Version constants
 	VersionDraftDejongRemoteStorage27 VersionName = "draft-dejong-remotestorage-27"
 
 	// The only version we support
 	SupportedVersion = VersionDraftDejongRemoteStorage27
 )
-
-// CheckScopeAccess implements RemoteStorage-compliant scope checking
-// according to the specification at https://remotestorage.io/spec/
-func CheckScopeAccess(scopes []Scope, module string, isRead bool) bool {
-	// Special case: public module is always readable without authentication
-	if module == PublicModule && isRead {
-		return true
-	}
-
-	// Check each scope for access
-	for _, scope := range scopes {
-		// '*:rw' grants any request
-		if scope.Module == "*" && scope.Access == ReadWriteAccess {
-			return true
-		}
-
-		// '*:r' grants any read request
-		if scope.Module == "*" && scope.Access == ReadAccess && isRead {
-			return true
-		}
-
-		// Module-specific access
-		if scope.Module == module {
-			// '<module>:rw' grants any request to the module
-			if scope.Access == ReadWriteAccess {
-				return true
-			}
-
-			// '<module>:r' grants read requests to the module
-			if scope.Access == ReadAccess && isRead {
-				return true
-			}
-		}
-	}
-
-	return false
-}

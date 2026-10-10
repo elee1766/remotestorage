@@ -16,16 +16,25 @@ some simple examples are in the cmd/ directory. these are used to help test and 
 
 ## server
 
-the remoteclient server implementation in rsserver is a partial implementation of the remotestorage server.
+`rsserver.Handler` implements the storage protocol: CORS and preflight,
+bearer auth with scope checks, public documents, folder listings,
+`If-Match`/`If-None-Match`, ranges, and the status codes of the spec.
 
-a fully fledged server must implement these interfaces
+an implementation provides
 
-- `ResourceResolver` - map a request to a user and path
+- `ResourceResolver` - map a request to a user and a storage path (`rstest.PathResolver` handles `/{user}/{path}`)
 - `Authenticator` - validate bearer tokens
-- `Authorizer` - check scopes (`NewScopeCheckingAuthorizer` covers the spec rules)
-- `StorageProvider` / `StorageBackend` - the actual storage. in-memory and filesystem backends are included
+- `Authorizer` - `NewScopeCheckingAuthorizer` covers the spec rules
+- `StorageProvider` / `StorageBackend` - the storage. backends must implement the storage model: folders exist only while they contain documents, every write changes the ETags of all ancestor folders, conditions are checked atomically. in-memory and filesystem backends are included
 
 oauth itself is left to the implementer. to support pkce, advertise the token endpoint via `webfinger.UserStorageInfo.TokenEndpoint`.
+
+## conformance tests
+
+`pkg/rsserver/rstest` is a black-box HTTP test suite for any remoteStorage
+server. `rstest.Run(t, target)` needs a storage root and a function that
+issues tokens with given scopes. `rstest.NewHarness` wires a `StorageBackend`
+into a test server, see `rstest_test.go`.
 
 ## client
 

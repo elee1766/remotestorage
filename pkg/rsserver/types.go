@@ -12,7 +12,7 @@ type AuthInfo struct {
 	// UserID is the unique identifier for the user (e.g., sub claim)
 	UserID string
 
-	// Username is the human-readable username (e.g., preferred_username)
+	// Username is the user name that appears in storage URLs
 	Username string
 
 	// Scopes are the access scopes granted to this request
@@ -21,19 +21,22 @@ type AuthInfo struct {
 
 // ResourceRef identifies a specific resource location (parsed from the URL)
 type ResourceRef struct {
-	// RequestedUser is the user identifier from the URL (e.g., username in path or subdomain)
-	// this could be empty if the request is not authenticated
+	// RequestedUser is the user whose storage is addressed (path segment or subdomain).
 	RequestedUser string
 
-	// Module being accessed (e.g., "contacts", "calendar")
-	Module string
-
-	// Path within the module (e.g., "/friends.json", "/events/2025/")
+	// Path relative to the user's storage root, starting with "/".
+	// Folders end in "/". Example: "/contacts/friends.json", "/public/blog/".
 	Path string
 
-	// IsPublic indicates if this is accessing the public namespace (/public/<module>/...)
+	// Module is the scope module of Path (filled by the handler).
+	Module string
+
+	// IsPublic reports whether Path is in the /public/ subtree (filled by the handler).
 	IsPublic bool
 }
+
+// IsFolder reports whether the resource is a folder.
+func (r *ResourceRef) IsFolder() bool { return rs.IsFolderPath(r.Path) }
 
 // ResourceRequest combines resource location with the operation type
 type ResourceRequest struct {
