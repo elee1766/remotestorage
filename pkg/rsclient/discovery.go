@@ -117,6 +117,17 @@ func GetAuthURL(storageInfo *rs.StorageInfo) (string, error) {
 	return authEndpoint, nil
 }
 
+// GetPKCEEndpoints returns the spec §10.1 authorization and token endpoints.
+// ok is false when the server does not advertise the code flow with S256,
+// in which case clients should use the implicit grant (GetAuthURL).
+func GetPKCEEndpoints(storageInfo *rs.StorageInfo) (authorizationEndpoint, tokenEndpoint string, ok bool) {
+	props := rs.NewRemoteStorageProperties(storageInfo.Properties)
+	if !props.SupportsPKCE() {
+		return "", "", false
+	}
+	return props.GetAuthorizationEndpoint(), props.GetTokenEndpoint(), true
+}
+
 // FindRemoteStorageLink finds the RemoteStorage link in a WebFinger response
 func FindRemoteStorageLink(resp *webfinger.Response) *webfinger.Link {
 	for i := range resp.Links {

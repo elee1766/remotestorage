@@ -88,8 +88,11 @@ func main() {
 		handleWebFinger(w, r, config.Host)
 	})
 
-	// OAuth authorization endpoint
+	// OAuth authorization endpoint (implicit grant and PKCE code flow)
 	mux.HandleFunc("/oauth/authorize", oauthProvider.HandleAuthDialog)
+
+	// OAuth token endpoint for the PKCE code flow (spec §10.1)
+	mux.HandleFunc("/oauth/token", oauthProvider.HandleToken)
 
 	// Storage endpoints
 	mux.Handle("/", storageHandler)
@@ -98,6 +101,7 @@ func main() {
 	log.Printf("Starting remoteStorage server on http://%s", config.Host)
 	log.Printf("WebFinger: http://%s/.well-known/webfinger", config.Host)
 	log.Printf("OAuth: http://%s/oauth/authorize", config.Host)
+	log.Printf("OAuth token: http://%s/oauth/token", config.Host)
 	log.Fatal(http.ListenAndServe(config.Host, mux))
 }
 
@@ -147,6 +151,8 @@ func handleWebFinger(w http.ResponseWriter, r *http.Request, host string) {
 		return
 	}
 
+	authorizeURL := fmt.Sprintf("http://%s/oauth/authorize", host)
+
 	// Build WebFinger response
 	response := map[string]interface{}{
 		"subject": resource,
@@ -155,8 +161,11 @@ func handleWebFinger(w http.ResponseWriter, r *http.Request, host string) {
 				"rel":  "http://tools.ietf.org/id/draft-dejong-remotestorage",
 				"href": fmt.Sprintf("http://%s/%s", host, username),
 				"properties": map[string]interface{}{
-					"http://remotestorage.io/spec/version":           "draft-dejong-remotestorage-27",
-					"http://tools.ietf.org/html/rfc6749#section-4.2": fmt.Sprintf("http://%s/oauth/authorize", host),
+					rs.PropVersion:            string(rs.SupportedVersion),
+					rs.PropImplicitAuthDialog: authorizeURL,
+					rs.PropAuthorizeEndpoint:  authorizeURL,
+					rs.PropTokenEndpoint:      fmt.Sprintf("http://%s/oauth/token", host),
+					rs.PropPKCEMethods:        rs.PKCEMethodS256,
 				},
 			},
 		},

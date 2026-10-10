@@ -18,6 +18,7 @@ import (
 	"anime.bike/remotestorage/pkg/webfinger"
 	"github.com/alecthomas/kong"
 	"github.com/pkg/browser"
+	"golang.org/x/oauth2"
 )
 
 type AuthInfo struct {
@@ -208,15 +209,6 @@ func getOrCreateAuth(ctx context.Context, remote string) (*AuthInfo, error) {
 
 	fmt.Printf("Discovery successful! Storage URL: %s\n", storageInfo.Href)
 
-	// Get auth URL
-	authURL, err := rsclient.GetAuthURL(storageInfo)
-	if err != nil {
-		fmt.Printf("Failed to get auth URL from properties: %v\n", storageInfo.Properties)
-		return nil, fmt.Errorf("no auth endpoint found: %w", err)
-	}
-
-	fmt.Printf("Auth endpoint found: %s\n", authURL)
-
 	// Build OAuth URL
 	// For 5apps.com and similar servers, client_id must match redirect_uri domain
 	// Always use HTTP for localhost redirect URI
@@ -226,6 +218,145 @@ func getOrCreateAuth(ctx context.Context, remote string) (*AuthInfo, error) {
 		clientID = redirectURI
 	}
 	scope := "*:rw"
+
+	var token string
+	var expiresAt time.Time
+	if authzURL, tokenURL, ok := rsclient.GetPKCEEndpoints(storageInfo); ok {
+		// Spec §10.1: clients SHOULD use PKCE when it is advertised.
+		fmt.Printf("Using authorization code flow with PKCE (token endpoint: %s)\n", tokenURL)
+		tok, err := pkceLogin(ctx, authzURL, tokenURL, clientID, redirectURI, scope)
+		if err != nil {
+			return nil, err
+		}
+		token = tok.AccessToken
+		expiresAt = tok.Expiry
+	} else {
+		tok, err := implicitLogin(storageInfo, clientID, redirectURI, scope)
+		if err != nil {
+			return nil, err
+		}
+		token = tok
+	}
+
+	// Save auth info
+	auth := AuthInfo{
+		StorageURL:  storageInfo.Href,
+		AccessToken: token,
+		ExpiresAt:   expiresAt,
+	}
+
+	if cache == nil {
+		cache = make(AuthCache)
+	}
+	cache[remote] = auth
+
+	err = saveAuthCache(cache)
+	if err != nil {
+		return nil, fmt.Errorf("failed to save auth: %w", err)
+	}
+
+	fmt.Printf("Successfully authenticated with %s\n", remote)
+	return &auth, nil
+}
+
+// openAuthURL prints the authorization URL and tries to open it in a browser.
+func openAuthURL(oauthURL string) {
+	fmt.Printf("\n=== Authentication Required ===\n")
+	fmt.Printf("Opening browser for authentication...\n")
+	fmt.Printf("\nVisit this URL to authenticate:\n%s\n\n", oauthURL)
+
+	if err := browser.OpenURL(oauthURL); err != nil {
+		fmt.Printf("Failed to open browser automatically: %v\n", err)
+		fmt.Printf("Please open the URL manually in your browser.\n")
+	}
+}
+
+// pkceLogin runs the authorization code flow with PKCE (spec §10.1).
+func pkceLogin(ctx context.Context, authzURL, tokenURL, clientID, redirectURI, scope string) (*oauth2.Token, error) {
+	scopes, err := rsclient.ParseScope(scope)
+	if err != nil {
+		return nil, err
+	}
+	config := rsclient.GetPKCEOAuth2Config(authzURL, tokenURL, clientID, redirectURI, scopes)
+	verifier := oauth2.GenerateVerifier()
+	state := oauth2.GenerateVerifier()
+
+	type result struct {
+		code string
+		err  error
+	}
+	resultChan := make(chan result, 1)
+
+	server := &http.Server{
+		Addr: ":8765",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/" {
+				http.NotFound(w, r)
+				return
+			}
+			q := r.URL.Query()
+			var res result
+			switch {
+			case q.Get("error") != "":
+				res.err = fmt.Errorf("OAuth error: %s %s", q.Get("error"), q.Get("error_description"))
+			case q.Get("state") != state:
+				res.err = fmt.Errorf("OAuth state mismatch")
+			case q.Get("code") == "":
+				res.err = fmt.Errorf("no authorization code received")
+			default:
+				res.code = q.Get("code")
+			}
+			w.Header().Set("Content-Type", "text/html")
+			if res.err != nil {
+				w.Write([]byte("<h1>Authentication Failed</h1><p>Please return to the terminal.</p>"))
+			} else {
+				w.Write([]byte("<h1>Authentication Successful!</h1><p>You can close this window and return to the terminal.</p>"))
+			}
+			select {
+			case resultChan <- res:
+			default:
+			}
+		}),
+	}
+	go func() {
+		if err := server.ListenAndServe(); err != http.ErrServerClosed {
+			select {
+			case resultChan <- result{err: err}:
+			default:
+			}
+		}
+	}()
+	defer server.Close()
+
+	openAuthURL(rsclient.GetPKCEAuthURL(config, state, verifier))
+
+	var res result
+	select {
+	case res = <-resultChan:
+	case <-time.After(5 * time.Minute):
+		return nil, fmt.Errorf("authentication timeout")
+	}
+	if res.err != nil {
+		return nil, res.err
+	}
+
+	tok, err := rsclient.ExchangePKCECode(ctx, config, res.code, verifier)
+	if err != nil {
+		return nil, fmt.Errorf("token exchange failed: %w", err)
+	}
+	return tok, nil
+}
+
+// implicitLogin runs the implicit grant flow.
+func implicitLogin(storageInfo *rs.StorageInfo, clientID, redirectURI, scope string) (string, error) {
+	// Get auth URL
+	authURL, err := rsclient.GetAuthURL(storageInfo)
+	if err != nil {
+		fmt.Printf("Failed to get auth URL from properties: %v\n", storageInfo.Properties)
+		return "", fmt.Errorf("no auth endpoint found: %w", err)
+	}
+
+	fmt.Printf("Auth endpoint found: %s\n", authURL)
 
 	// Build standard implicit flow OAuth URL (no PKCE needed)
 	oauthURL := fmt.Sprintf("%s?client_id=%s&redirect_uri=%s&response_type=token&scope=%s",
@@ -336,47 +467,20 @@ if (hash) {
 	// Give server time to start
 	time.Sleep(100 * time.Millisecond)
 
-	// Open browser
-	fmt.Printf("\n=== Authentication Required ===\n")
-	fmt.Printf("Opening browser for authentication...\n")
-	fmt.Printf("\nVisit this URL to authenticate:\n%s\n\n", oauthURL)
-
-	if err := browser.OpenURL(oauthURL); err != nil {
-		fmt.Printf("Failed to open browser automatically: %v\n", err)
-		fmt.Printf("Please open the URL manually in your browser.\n")
-	}
+	openAuthURL(oauthURL)
 
 	// Wait for token or error
-	var token string
 	select {
-	case token = <-tokenChan:
+	case token := <-tokenChan:
 		server.Close()
+		return token, nil
 	case err := <-errorChan:
 		server.Close()
-		return nil, err
+		return "", err
 	case <-time.After(5 * time.Minute):
 		server.Close()
-		return nil, fmt.Errorf("authentication timeout")
+		return "", fmt.Errorf("authentication timeout")
 	}
-
-	// Save auth info
-	auth := AuthInfo{
-		StorageURL:  storageInfo.Href,
-		AccessToken: token,
-	}
-
-	if cache == nil {
-		cache = make(AuthCache)
-	}
-	cache[remote] = auth
-
-	err = saveAuthCache(cache)
-	if err != nil {
-		return nil, fmt.Errorf("failed to save auth: %w", err)
-	}
-
-	fmt.Printf("Successfully authenticated with %s\n", remote)
-	return &auth, nil
 }
 
 // getClient creates a client for the given remote

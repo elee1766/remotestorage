@@ -33,6 +33,17 @@ type UserStorageInfo struct {
 	// WebAuthoringDomain for web authoring support
 	// Set to empty string to omit
 	WebAuthoringDomain string
+
+	// TokenEndpoint enables the optional PKCE code flow (spec §10.1) when set.
+	// The authorization endpoint advertised for it is AuthorizationEndpoint,
+	// falling back to AuthEndpoint.
+	TokenEndpoint string
+
+	// AuthorizationEndpoint overrides the §10.1 authorization endpoint.
+	AuthorizationEndpoint string
+
+	// PKCEMethods is the advertised code_challenge method list. Defaults to "S256".
+	PKCEMethods string
 }
 
 // StorageResolver is a callback interface for looking up user storage information
@@ -182,6 +193,22 @@ func (s *Server) buildWebFingerResponse(subject string, info *UserStorageInfo) *
 	// Add web authoring domain if specified
 	if info.WebAuthoringDomain != "" {
 		props.WebAuthoringDomain = nullable.NewString(info.WebAuthoringDomain)
+	}
+
+	if info.TokenEndpoint != "" {
+		authz := info.AuthorizationEndpoint
+		if authz == "" && info.AuthEndpoint != nil {
+			authz = *info.AuthEndpoint
+		}
+		methods := info.PKCEMethods
+		if methods == "" {
+			methods = rs.PKCEMethodS256
+		}
+		if authz != "" {
+			props.AuthorizationEndpoint = nullable.NewString(authz)
+			props.TokenEndpoint = nullable.NewString(info.TokenEndpoint)
+			props.PKCEMethods = nullable.NewString(methods)
+		}
 	}
 
 	// Add the remoteStorage link
