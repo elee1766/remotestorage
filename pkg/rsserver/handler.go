@@ -230,6 +230,11 @@ func (s *Handler) readDocument(w http.ResponseWriter, r *http.Request, ctx conte
 	s.hooks.callAfterRead(r, AuthInfoFromRequest(ctx), req)
 }
 
+// DocumentCSP is sent with every document. Documents are app data, so a
+// stored HTML or SVG file opened directly in a browser must not run scripts
+// with the storage origin.
+const DocumentCSP = "sandbox; default-src 'none'"
+
 func writeDocumentHeaders(w http.ResponseWriter, m *rs.Metadata) {
 	h := w.Header()
 	ct := m.ContentType
@@ -237,6 +242,8 @@ func writeDocumentHeaders(w http.ResponseWriter, m *rs.Metadata) {
 		ct = "application/octet-stream"
 	}
 	h.Set("Content-Type", ct)
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", DocumentCSP)
 	if !m.LastModified.IsZero() {
 		h.Set("Last-Modified", rs.FormatHTTPDate(m.LastModified))
 	}

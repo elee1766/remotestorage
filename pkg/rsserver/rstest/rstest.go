@@ -547,6 +547,18 @@ func (c *client) testPublic(t *testing.T) {
 	if cc := r.Header.Get("Cache-Control"); !strings.Contains(cc, "public") || !strings.Contains(cc, "no-cache") {
 		t.Fatalf("public Cache-Control %q, want 'no-cache, public'", cc)
 	}
+	// Public documents are opened directly in browsers; stored HTML must not
+	// run as active content on the storage origin.
+	html := "/public/" + c.mod + "/page.html"
+	expect(t, c.put(t, html, "<script>alert(1)</script>", "Content-Type", "text/html"), 201, "create public html")
+	r = c.do(t, "GET", c.url(html), "", nil)
+	if r.Header.Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("public document without X-Content-Type-Options: nosniff")
+	}
+	if csp := r.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "sandbox") {
+		t.Fatalf("public HTML served without a sandbox CSP (got %q)", csp)
+	}
+	expect(t, c.del(t, html), 200, "cleanup")
 	expect(t, c.do(t, "HEAD", c.url(p), "", nil), 200, "public HEAD without token")
 	expect(t, c.do(t, "GET", c.url(p), "garbage-token", nil), 200, "public GET with invalid token")
 	expect(t, c.do(t, "GET", c.url("/public/"+c.mod+"/"), "", nil), 401, "public folder without token")
