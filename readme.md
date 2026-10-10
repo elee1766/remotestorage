@@ -20,6 +20,11 @@ some simple examples are in the cmd/ directory. these are used to help test and 
 bearer auth with scope checks, public documents, folder listings,
 `If-Match`/`If-None-Match`, ranges, and the status codes of the spec.
 
+private documents and authenticated folder listings use `private, no-cache`.
+public documents remain publicly cacheable and are served with `nosniff` and a
+sandbox CSP. configure transport deadlines, request concurrency and upload
+limits in the host server.
+
 an implementation provides
 
 - `ResourceResolver` - map a request to a user and a storage path (`rstest.PathResolver` handles `/{user}/{path}`)
@@ -44,3 +49,8 @@ into a test server, see `rstest_test.go`.
 
 - `cmd/myrs` - toy server with static users, implicit and pkce oauth
 - `cmd/rscli` - cli client (ls, get, put, ...), picks pkce when available
+
+the CLI binds its OAuth callback listener to `127.0.0.1:8765` before opening the
+browser and validates state for both flows. implicit callbacks submit the token
+in a bounded POST body rather than a query string. a login waits at most five
+minutes. the authorization server must echo the supplied state.

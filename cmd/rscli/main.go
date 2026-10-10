@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -211,8 +213,8 @@ func getOrCreateAuth(ctx context.Context, remote string) (*AuthInfo, error) {
 
 	// Build OAuth URL
 	// For 5apps.com and similar servers, client_id must match redirect_uri domain
-	// Always use HTTP for localhost redirect URI
-	redirectURI := "http://localhost:8765/"
+	// Always use HTTP for the IPv4 loopback redirect URI.
+	redirectURI := "http://127.0.0.1:8765/"
 	clientID := os.Getenv("RSCLI_CLIENT_ID")
 	if clientID == "" {
 		clientID = redirectURI
@@ -231,7 +233,7 @@ func getOrCreateAuth(ctx context.Context, remote string) (*AuthInfo, error) {
 		token = tok.AccessToken
 		expiresAt = tok.Expiry
 	} else {
-		tok, err := implicitLogin(storageInfo, clientID, redirectURI, scope)
+		tok, err := implicitLogin(ctx, storageInfo, clientID, redirectURI, scope)
 		if err != nil {
 			return nil, err
 		}
@@ -286,27 +288,43 @@ func pkceLogin(ctx context.Context, authzURL, tokenURL, clientID, redirectURI, s
 		err  error
 	}
 	resultChan := make(chan result, 1)
+	listener, err := net.Listen("tcp", "127.0.0.1:8765")
+	if err != nil {
+		return nil, fmt.Errorf("start OAuth callback listener: %w", err)
+	}
 
 	server := &http.Server{
-		Addr: ":8765",
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       30 * time.Second,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/" {
+			setOAuthCallbackHeaders(w, false)
+			if !isOAuthCallbackHost(r.Host) {
+				http.Error(w, "Invalid callback host", http.StatusBadRequest)
+				return
+			}
+			if r.Method != http.MethodGet || r.URL.Path != "/" {
 				http.NotFound(w, r)
 				return
 			}
 			q := r.URL.Query()
 			var res result
+			if q.Get("state") != state {
+				http.Error(w, "Invalid OAuth state", http.StatusBadRequest)
+				return
+			}
 			switch {
 			case q.Get("error") != "":
-				res.err = fmt.Errorf("OAuth error: %s %s", q.Get("error"), q.Get("error_description"))
-			case q.Get("state") != state:
-				res.err = fmt.Errorf("OAuth state mismatch")
+				res.err = fmt.Errorf("OAuth authorization failed")
 			case q.Get("code") == "":
-				res.err = fmt.Errorf("no authorization code received")
+				http.Error(w, "Missing authorization code", http.StatusBadRequest)
+				return
 			default:
 				res.code = q.Get("code")
 			}
-			w.Header().Set("Content-Type", "text/html")
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
 			if res.err != nil {
 				w.Write([]byte("<h1>Authentication Failed</h1><p>Please return to the terminal.</p>"))
 			} else {
@@ -319,7 +337,7 @@ func pkceLogin(ctx context.Context, authzURL, tokenURL, clientID, redirectURI, s
 		}),
 	}
 	go func() {
-		if err := server.ListenAndServe(); err != http.ErrServerClosed {
+		if err := server.Serve(listener); err != http.ErrServerClosed {
 			select {
 			case resultChan <- result{err: err}:
 			default:
@@ -333,6 +351,8 @@ func pkceLogin(ctx context.Context, authzURL, tokenURL, clientID, redirectURI, s
 	var res result
 	select {
 	case res = <-resultChan:
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case <-time.After(5 * time.Minute):
 		return nil, fmt.Errorf("authentication timeout")
 	}
@@ -348,139 +368,131 @@ func pkceLogin(ctx context.Context, authzURL, tokenURL, clientID, redirectURI, s
 }
 
 // implicitLogin runs the implicit grant flow.
-func implicitLogin(storageInfo *rs.StorageInfo, clientID, redirectURI, scope string) (string, error) {
-	// Get auth URL
+func implicitLogin(ctx context.Context, storageInfo *rs.StorageInfo, clientID, redirectURI, scope string) (string, error) {
 	authURL, err := rsclient.GetAuthURL(storageInfo)
 	if err != nil {
-		fmt.Printf("Failed to get auth URL from properties: %v\n", storageInfo.Properties)
 		return "", fmt.Errorf("no auth endpoint found: %w", err)
 	}
-
-	fmt.Printf("Auth endpoint found: %s\n", authURL)
-
-	// Build standard implicit flow OAuth URL (no PKCE needed)
-	oauthURL := fmt.Sprintf("%s?client_id=%s&redirect_uri=%s&response_type=token&scope=%s",
-		authURL,
-		url.QueryEscape(clientID),
-		url.QueryEscape(redirectURI),
-		url.QueryEscape(scope),
-	)
-
-	// Start local server to receive callback
-	tokenChan := make(chan string)
-	errorChan := make(chan error)
-
-	server := &http.Server{
-		Addr: ":8765",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-
-			// For implicit flow, token comes in fragment, not query
-			// We need JavaScript to extract it
-			html := `
-<!DOCTYPE html>
-<html>
-<head><title>RemoteStorage Authentication</title></head>
-<body>
-<div id="status">
-<h1>Processing...</h1>
-<p>Extracting authentication token...</p>
-</div>
-<script>
-// Extract from URL fragment
-var hash = window.location.hash.substring(1);
-console.log('Full hash:', hash);
-
-// Also display it on the page for debugging
-document.getElementById('status').innerHTML += '<p style="font-size:10px;color:#666">Debug: ' + hash + '</p>';
-
-if (hash) {
-    var params = new URLSearchParams(hash);
-    var token = params.get('access_token');
-    var error = params.get('error');
-    var errorDesc = params.get('error_description');
-
-    console.log('Parsed token:', token);
-    console.log('All params:', Array.from(params.entries()));
-
-    if (error) {
-        document.getElementById('status').innerHTML =
-            '<h1>Authentication Failed</h1>' +
-            '<p>Error: ' + error + '</p>' +
-            (errorDesc ? '<p>' + errorDesc + '</p>' : '') +
-            '<p>Please return to the terminal.</p>';
-        // Send error to server
-        fetch('/callback?error=' + encodeURIComponent(error) +
-              (errorDesc ? '&error_description=' + encodeURIComponent(errorDesc) : ''));
-    } else if (token) {
-        document.getElementById('status').innerHTML =
-            '<h1>Authentication Successful!</h1>' +
-            '<p>You can close this window and return to the terminal.</p>';
-        // Send token to server
-        fetch('/callback?access_token=' + encodeURIComponent(token))
-            .then(() => window.close())
-            .catch(err => console.error('Failed to send token:', err));
-    } else {
-        document.getElementById('status').innerHTML =
-            '<h1>No token received</h1>' +
-            '<p>URL fragment: ' + hash + '</p>' +
-            '<p>Please check the browser console for details.</p>';
-    }
-} else {
-    document.getElementById('status').innerHTML =
-        '<h1>Waiting for redirect...</h1>' +
-        '<p>If you see this message, the OAuth server may not have redirected properly.</p>';
-}
-</script>
-</body>
-</html>`
-
-			if r.URL.Path == "/" {
-				w.Header().Set("Content-Type", "text/html")
-				w.Write([]byte(html))
-			} else if r.URL.Path == "/callback" {
-				// Handle the token or error sent by JavaScript
-				token := r.URL.Query().Get("access_token")
-				errorParam := r.URL.Query().Get("error")
-				errorDesc := r.URL.Query().Get("error_description")
-
-				if token != "" {
-					tokenChan <- token
-				} else if errorParam != "" {
-					if errorDesc != "" {
-						errorChan <- fmt.Errorf("OAuth error: %s - %s", errorParam, errorDesc)
-					} else {
-						errorChan <- fmt.Errorf("OAuth error: %s", errorParam)
-					}
-				}
-				w.WriteHeader(http.StatusOK)
-			}
-		}),
+	parsedAuthURL, err := url.Parse(authURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid auth endpoint: %w", err)
 	}
+	state := oauth2.GenerateVerifier()
+	query := parsedAuthURL.Query()
+	query.Set("client_id", clientID)
+	query.Set("redirect_uri", redirectURI)
+	query.Set("response_type", "token")
+	query.Set("scope", scope)
+	query.Set("state", state)
+	parsedAuthURL.RawQuery = query.Encode()
+	oauthURL := parsedAuthURL.String()
 
-	// Start server in background
+	resultChan := make(chan implicitCallbackResult, 1)
+	listener, err := net.Listen("tcp", "127.0.0.1:8765")
+	if err != nil {
+		return "", fmt.Errorf("start OAuth callback listener: %w", err)
+	}
+	server := &http.Server{
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		Handler:           implicitCallbackHandler(state, resultChan),
+	}
 	go func() {
-		if err := server.ListenAndServe(); err != http.ErrServerClosed {
-			errorChan <- err
+		if err := server.Serve(listener); err != http.ErrServerClosed {
+			select {
+			case resultChan <- implicitCallbackResult{err: err}:
+			default:
+			}
 		}
 	}()
-
-	// Give server time to start
-	time.Sleep(100 * time.Millisecond)
+	defer server.Close()
 
 	openAuthURL(oauthURL)
-
-	// Wait for token or error
 	select {
-	case token := <-tokenChan:
-		server.Close()
-		return token, nil
-	case err := <-errorChan:
-		server.Close()
-		return "", err
+	case result := <-resultChan:
+		return result.token, result.err
+	case <-ctx.Done():
+		return "", ctx.Err()
 	case <-time.After(5 * time.Minute):
-		server.Close()
 		return "", fmt.Errorf("authentication timeout")
 	}
+}
+
+type implicitCallbackResult struct {
+	token string
+	err   error
+}
+
+func isOAuthCallbackHost(host string) bool {
+	return strings.EqualFold(host, "localhost:8765") || host == "127.0.0.1:8765"
+}
+
+func setOAuthCallbackHeaders(w http.ResponseWriter, implicit bool) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Cache-Control", "no-store")
+	if implicit {
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+	} else {
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+	}
+}
+
+func implicitCallbackHandler(state string, resultChan chan<- implicitCallbackResult) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setOAuthCallbackHeaders(w, true)
+		if !isOAuthCallbackHost(r.Host) {
+			http.Error(w, "Invalid callback host", http.StatusBadRequest)
+			return
+		}
+		if r.URL.Path == "/" {
+			if r.Method != http.MethodGet || r.URL.RawQuery != "" {
+				http.Error(w, "Not found", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			io.WriteString(w, `<!doctype html><title>RemoteStorage authentication</title><h1 id="title">Processing</h1><p id="status">Return to the terminal when complete.</p><script>
+const p=new URLSearchParams(location.hash.slice(1)), b=new URLSearchParams();
+history.replaceState(null,'','/');
+b.set('state',p.get('state')||''); b.set('access_token',p.get('access_token')||''); b.set('error',p.get('error')||'');
+fetch('/callback',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b.toString()}).then(r=>{document.getElementById('title').textContent=r.ok?'Authentication complete':'Authentication failed'}).catch(()=>{document.getElementById('title').textContent='Authentication failed'});
+</script>`)
+			return
+		}
+		if r.URL.Path != "/callback" || r.Method != http.MethodPost || r.URL.RawQuery != "" {
+			http.Error(w, "Not found", http.StatusNotFound)
+			return
+		}
+		if r.Header.Get("Content-Type") != "application/x-www-form-urlencoded" {
+			http.Error(w, "Unsupported content type", http.StatusUnsupportedMediaType)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "Invalid callback", http.StatusBadRequest)
+			return
+		}
+		if r.Form.Get("state") != state {
+			http.Error(w, "Invalid OAuth state", http.StatusBadRequest)
+			return
+		}
+		result := implicitCallbackResult{}
+		if r.Form.Get("error") != "" {
+			result.err = fmt.Errorf("OAuth authorization failed")
+		} else if r.Form.Get("access_token") == "" {
+			http.Error(w, "Missing access token", http.StatusBadRequest)
+			return
+		} else {
+			result.token = r.Form.Get("access_token")
+		}
+		select {
+		case resultChan <- result:
+		default:
+		}
+		w.WriteHeader(http.StatusOK)
+	})
 }
 
 // getClient creates a client for the given remote

@@ -268,8 +268,8 @@ func (c *client) testDocuments(t *testing.T) {
 	if got := etag(t, r); got != e1 {
 		t.Fatalf("GET ETag %q, PUT returned %q", got, e1)
 	}
-	if cc := r.Header.Get("Cache-Control"); !strings.Contains(cc, "no-cache") || strings.Contains(cc, "public") {
-		t.Fatalf("Cache-Control %q, want no-cache", cc)
+	if cc := r.Header.Get("Cache-Control"); !strings.Contains(cc, "no-cache") || !strings.Contains(cc, "private") || strings.Contains(cc, "public") {
+		t.Fatalf("Cache-Control %q, want private, no-cache", cc)
 	}
 	if lm := r.Header.Get("Last-Modified"); lm != "" {
 		if _, err := http.ParseTime(lm); err != nil {
@@ -562,6 +562,11 @@ func (c *client) testPublic(t *testing.T) {
 	expect(t, c.do(t, "HEAD", c.url(p), "", nil), 200, "public HEAD without token")
 	expect(t, c.do(t, "GET", c.url(p), "garbage-token", nil), 200, "public GET with invalid token")
 	expect(t, c.do(t, "GET", c.url("/public/"+c.mod+"/"), "", nil), 401, "public folder without token")
+	folder := c.do(t, "GET", c.url("/public/"+c.mod+"/"), c.tok, nil)
+	expect(t, folder, 200, "authenticated public folder GET")
+	if cc := folder.Header.Get("Cache-Control"); !strings.Contains(cc, "private") || !strings.Contains(cc, "no-cache") || strings.Contains(cc, "public") {
+		t.Fatalf("public folder Cache-Control %q, want private, no-cache", cc)
+	}
 	expect(t, c.do(t, "GET", c.url("/public/"+c.mod+"/missing"), "", nil), 404, "public missing document")
 	expect(t, c.do(t, "PUT", c.url(p), "", strings.NewReader("x"), "Content-Type", "text/plain"), 401, "public PUT without token")
 	expect(t, c.do(t, "DELETE", c.url(p), "", nil), 401, "public DELETE without token")

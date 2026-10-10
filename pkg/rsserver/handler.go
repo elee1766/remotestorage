@@ -108,10 +108,10 @@ func (s *Handler) prepare(w http.ResponseWriter, r *http.Request, isWrite bool) 
 }
 
 func cacheControl(ref *ResourceRef) string {
-	if ref.IsPublic {
+	if ref.IsPublic && !ref.IsFolder() {
 		return "no-cache, public"
 	}
-	return "no-cache"
+	return "private, no-cache"
 }
 
 func (s *Handler) handleRead(w http.ResponseWriter, r *http.Request) {
