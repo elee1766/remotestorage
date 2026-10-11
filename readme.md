@@ -14,7 +14,7 @@ some simple examples are in the cmd/ directory. these are used to help test and 
 - `pkg/rsclient` - client, discovery, oauth helpers
 - `pkg/webfinger` - webfinger server and parsing
 - `pkg/rsserver/rstest` - conformance suite, test harness, in-memory storage for tests
-- `contrib/storage/filesystem` - opinionated directory-tree storage backend, optional
+- `contrib/storage/filesystem` - opinionated directory-tree storage backend on `os.Root`, optional
 
 ## server
 
