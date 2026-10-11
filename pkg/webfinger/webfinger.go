@@ -1,7 +1,6 @@
 package webfinger
 
 import (
-	"anime.bike/remotestorage/pkg/nullable"
 	"anime.bike/remotestorage/pkg/rs"
 )
 
@@ -48,19 +47,17 @@ func (wf *WebFinger) AddRemoteStorageLinkWithValues(href string, version, authEn
 	}
 
 	if authEndpoint != "" {
-		props.AuthEndpoint = nullable.NewString(authEndpoint)
+		props.AuthEndpoint = new(authEndpoint)
 	}
 
-	if queryTokenSupport != nil {
-		props.QueryTokenSupport = nullable.NewBoolPtr(queryTokenSupport)
-	}
+	props.QueryTokenSupport = queryTokenSupport
 
 	if rangeRequestSupport != "" {
-		props.RangeRequestSupport = nullable.NewString(rangeRequestSupport)
+		props.RangeRequestSupport = new(rangeRequestSupport)
 	}
 
 	if webAuthoringDomain != "" {
-		props.WebAuthoringDomain = nullable.NewString(webAuthoringDomain)
+		props.WebAuthoringDomain = new(webAuthoringDomain)
 	}
 
 	wf.AddRemoteStorageLink(href, props)

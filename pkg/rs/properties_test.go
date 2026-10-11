@@ -4,17 +4,15 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-
-	"anime.bike/remotestorage/pkg/nullable"
 )
 
 func TestRemoteStorageProperties_MarshalJSON(t *testing.T) {
 	props := &RemoteStorageProperties{
 		Version:             SupportedVersion,
-		AuthEndpoint:        nullable.NewString("https://example.com/oauth"),
-		QueryTokenSupport:   nullable.NewBool(true),
-		RangeRequestSupport: nullable.NewString("GET"),
-		WebAuthoringDomain:  nullable.String{Value: nil}, // Explicit null
+		AuthEndpoint:        new("https://example.com/oauth"),
+		QueryTokenSupport:   new(true),
+		RangeRequestSupport: new("GET"),
+		WebAuthoringDomain:  nil, // Explicit null
 	}
 
 	data, err := json.Marshal(props)

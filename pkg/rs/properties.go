@@ -1,10 +1,6 @@
 package rs
 
-import (
-	"strings"
-
-	"anime.bike/remotestorage/pkg/nullable"
-)
+import "strings"
 
 // WebFinger property keys on the remoteStorage link.
 const (
@@ -18,7 +14,8 @@ const (
 	PropWebAuthoringDomain  = "http://remotestorage.io/spec/web-authoring"
 )
 
-// RemoteStorageProperties represents the standardized WebFinger properties for RemoteStorage
+// RemoteStorageProperties represents the standardized WebFinger properties for RemoteStorage.
+// Nil pointers encode as JSON null, as in the spec's examples.
 type RemoteStorageProperties struct {
 	// Version represents the RemoteStorage protocol version
 	// Example: "draft-dejong-remotestorage-27"
@@ -26,25 +23,25 @@ type RemoteStorageProperties struct {
 
 	// AuthEndpoint represents the OAuth 2.0 authorization endpoint URL
 	// Example: "https://example.com/oauth/auth"
-	AuthEndpoint nullable.String `json:"http://tools.ietf.org/html/rfc6749#section-4.2"`
+	AuthEndpoint *string `json:"http://tools.ietf.org/html/rfc6749#section-4.2"`
 
 	// QueryTokenSupport indicates if bearer tokens can be passed as query parameters
 	// true if supported, false if not supported, null if unspecified
-	QueryTokenSupport nullable.Bool `json:"http://tools.ietf.org/html/rfc6750#section-2.3"`
+	QueryTokenSupport *bool `json:"http://tools.ietf.org/html/rfc6750#section-2.3"`
 
 	// RangeRequestSupport indicates if HTTP Range requests are supported
 	// "GET" if supported for GET requests, null if not supported
-	RangeRequestSupport nullable.String `json:"http://tools.ietf.org/html/rfc7233"`
+	RangeRequestSupport *string `json:"http://tools.ietf.org/html/rfc7233"`
 
 	// WebAuthoringDomain represents the domain for web authoring content
 	// Domain name if web authoring is supported, null if not supported
-	WebAuthoringDomain nullable.String `json:"http://remotestorage.io/spec/web-authoring"`
+	WebAuthoringDomain *string `json:"http://remotestorage.io/spec/web-authoring"`
 
 	// Optional PKCE support (spec §10.1). Omitted when unset.
-	AuthorizationEndpoint nullable.String `json:"http://tools.ietf.org/html/rfc6749#section-3.1,omitzero"`
-	TokenEndpoint         nullable.String `json:"http://tools.ietf.org/html/rfc6749#section-3.2,omitzero"`
+	AuthorizationEndpoint *string `json:"http://tools.ietf.org/html/rfc6749#section-3.1,omitempty"`
+	TokenEndpoint         *string `json:"http://tools.ietf.org/html/rfc6749#section-3.2,omitempty"`
 	// PKCEMethods lists supported code_challenge methods, e.g. "S256".
-	PKCEMethods nullable.String `json:"http://tools.ietf.org/html/rfc7636,omitzero"`
+	PKCEMethods *string `json:"http://tools.ietf.org/html/rfc7636,omitempty"`
 }
 
 // NewRemoteStorageProperties creates RemoteStorageProperties from a map
@@ -61,45 +58,50 @@ func NewRemoteStorageProperties(props map[string]interface{}) *RemoteStorageProp
 	}
 
 	if v, ok := props[PropImplicitAuthDialog].(string); ok {
-		p.AuthEndpoint = nullable.NewString(v)
+		p.AuthEndpoint = &v
 	}
 
 	if v, ok := props[PropQueryTokenSupport].(bool); ok {
-		p.QueryTokenSupport = nullable.NewBool(v)
+		p.QueryTokenSupport = &v
 	}
 
 	if v, ok := props[PropRangeRequestSupport].(string); ok {
-		p.RangeRequestSupport = nullable.NewString(v)
+		p.RangeRequestSupport = &v
 	}
 
 	if v, ok := props[PropWebAuthoringDomain].(string); ok {
-		p.WebAuthoringDomain = nullable.NewString(v)
+		p.WebAuthoringDomain = &v
 	}
 
 	if v, ok := props[PropAuthorizeEndpoint].(string); ok {
-		p.AuthorizationEndpoint = nullable.NewString(v)
+		p.AuthorizationEndpoint = &v
 	}
 
 	if v, ok := props[PropTokenEndpoint].(string); ok {
-		p.TokenEndpoint = nullable.NewString(v)
+		p.TokenEndpoint = &v
 	}
 
 	if v, ok := props[PropPKCEMethods].(string); ok {
-		p.PKCEMethods = nullable.NewString(v)
+		p.PKCEMethods = &v
 	}
 
 	return p
 }
 
+func deref[T any](p *T) T {
+	var zero T
+	if p == nil {
+		return zero
+	}
+	return *p
+}
+
 // SupportsPKCE reports whether the server advertises the §10.1 code flow with S256.
 func (p *RemoteStorageProperties) SupportsPKCE() bool {
-	if p == nil || p.AuthorizationEndpoint.Value == nil || p.TokenEndpoint.Value == nil || p.PKCEMethods.Value == nil {
+	if p == nil || deref(p.AuthorizationEndpoint) == "" || deref(p.TokenEndpoint) == "" {
 		return false
 	}
-	if *p.AuthorizationEndpoint.Value == "" || *p.TokenEndpoint.Value == "" {
-		return false
-	}
-	for _, m := range strings.FieldsFunc(*p.PKCEMethods.Value, func(r rune) bool { return r == ' ' || r == ',' }) {
+	for _, m := range strings.FieldsFunc(deref(p.PKCEMethods), func(r rune) bool { return r == ' ' || r == ',' }) {
 		if m == PKCEMethodS256 {
 			return true
 		}
@@ -109,26 +111,26 @@ func (p *RemoteStorageProperties) SupportsPKCE() bool {
 
 // GetAuthorizationEndpoint returns the §10.1 authorization endpoint, if advertised.
 func (p *RemoteStorageProperties) GetAuthorizationEndpoint() string {
-	if p != nil && p.AuthorizationEndpoint.Value != nil {
-		return *p.AuthorizationEndpoint.Value
+	if p == nil {
+		return ""
 	}
-	return ""
+	return deref(p.AuthorizationEndpoint)
 }
 
 // GetTokenEndpoint returns the §10.1 token endpoint, if advertised.
 func (p *RemoteStorageProperties) GetTokenEndpoint() string {
-	if p != nil && p.TokenEndpoint.Value != nil {
-		return *p.TokenEndpoint.Value
+	if p == nil {
+		return ""
 	}
-	return ""
+	return deref(p.TokenEndpoint)
 }
 
 // GetAuthEndpoint returns the OAuth authorization endpoint URL if available
 func (p *RemoteStorageProperties) GetAuthEndpoint() string {
-	if p != nil && p.AuthEndpoint.Value != nil {
-		return *p.AuthEndpoint.Value
+	if p == nil {
+		return ""
 	}
-	return ""
+	return deref(p.AuthEndpoint)
 }
 
 // GetVersion returns the RemoteStorage protocol version if available
@@ -141,24 +143,18 @@ func (p *RemoteStorageProperties) GetVersion() string {
 
 // SupportsQueryToken returns true if bearer tokens can be passed as query parameters
 func (p *RemoteStorageProperties) SupportsQueryToken() bool {
-	if p != nil && p.QueryTokenSupport.Value != nil {
-		return *p.QueryTokenSupport.Value
-	}
-	return false
+	return p != nil && deref(p.QueryTokenSupport)
 }
 
 // SupportsRangeRequests returns true if HTTP Range requests are supported
 func (p *RemoteStorageProperties) SupportsRangeRequests() bool {
-	if p != nil && p.RangeRequestSupport.Value != nil {
-		return *p.RangeRequestSupport.Value == "GET"
-	}
-	return false
+	return p != nil && deref(p.RangeRequestSupport) == "GET"
 }
 
 // GetWebAuthoringDomain returns the web authoring domain if available
 func (p *RemoteStorageProperties) GetWebAuthoringDomain() string {
-	if p != nil && p.WebAuthoringDomain.Value != nil {
-		return *p.WebAuthoringDomain.Value
+	if p == nil {
+		return ""
 	}
-	return ""
+	return deref(p.WebAuthoringDomain)
 }

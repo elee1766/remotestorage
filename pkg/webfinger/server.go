@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"strings"
 
-	"anime.bike/remotestorage/pkg/nullable"
 	"anime.bike/remotestorage/pkg/rs"
 )
 
@@ -176,23 +175,19 @@ func (s *Server) buildWebFingerResponse(subject string, info *UserStorageInfo) *
 	}
 
 	// Add auth endpoint if provided
-	if info.AuthEndpoint != nil {
-		props.AuthEndpoint = nullable.NewString(*info.AuthEndpoint)
-	}
+	props.AuthEndpoint = info.AuthEndpoint
 
 	// Add query token support if specified
-	if info.QueryTokenSupport != nil {
-		props.QueryTokenSupport = nullable.NewBoolPtr(info.QueryTokenSupport)
-	}
+	props.QueryTokenSupport = info.QueryTokenSupport
 
 	// Add range request support if specified
 	if info.RangeRequestSupport != "" {
-		props.RangeRequestSupport = nullable.NewString(info.RangeRequestSupport)
+		props.RangeRequestSupport = new(info.RangeRequestSupport)
 	}
 
 	// Add web authoring domain if specified
 	if info.WebAuthoringDomain != "" {
-		props.WebAuthoringDomain = nullable.NewString(info.WebAuthoringDomain)
+		props.WebAuthoringDomain = new(info.WebAuthoringDomain)
 	}
 
 	if info.TokenEndpoint != "" {
@@ -205,9 +200,9 @@ func (s *Server) buildWebFingerResponse(subject string, info *UserStorageInfo) *
 			methods = rs.PKCEMethodS256
 		}
 		if authz != "" {
-			props.AuthorizationEndpoint = nullable.NewString(authz)
-			props.TokenEndpoint = nullable.NewString(info.TokenEndpoint)
-			props.PKCEMethods = nullable.NewString(methods)
+			props.AuthorizationEndpoint = new(authz)
+			props.TokenEndpoint = new(info.TokenEndpoint)
+			props.PKCEMethods = new(methods)
 		}
 	}
 
