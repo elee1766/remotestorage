@@ -37,6 +37,8 @@ an implementation provides
 
 oauth itself is left to the implementer. to support pkce, advertise the token endpoint via `webfinger.UserStorageInfo.TokenEndpoint`.
 
+importantly, these are all separate interfaces, so they should be mix-and-match-able
+
 ## conformance tests
 
 `pkg/rsserver/rstest` is a black-box HTTP test suite for any remoteStorage

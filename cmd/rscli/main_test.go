@@ -9,7 +9,7 @@ import (
 
 func TestImplicitCallbackRejectsQueryTokenAndSecuresPOST(t *testing.T) {
 	results := make(chan implicitCallbackResult, 1)
-	handler := implicitCallbackHandler("expected-state", results)
+	handler := implicitCallbackHandler("expected-state", "127.0.0.1:8765", results)
 
 	request := httptest.NewRequest(http.MethodPost, "/callback?access_token=stolen", strings.NewReader("state=expected-state&access_token=posted"))
 	request.Host = "localhost:8765"

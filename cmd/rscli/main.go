@@ -211,10 +211,16 @@ func getOrCreateAuth(ctx context.Context, remote string) (*AuthInfo, error) {
 
 	fmt.Printf("Discovery successful! Storage URL: %s\n", storageInfo.Href)
 
-	// Build OAuth URL
+	// Bind the callback listener first so the redirect URI carries the real port.
+	// Port 0 lets the OS pick a free one (RFC 8252 §7.3 loopback redirect).
+	listener, err := net.Listen("tcp", callbackListenAddr())
+	if err != nil {
+		return nil, fmt.Errorf("start OAuth callback listener: %w", err)
+	}
+	defer listener.Close()
+	callbackHost := listener.Addr().String()
+	redirectURI := "http://" + callbackHost + "/"
 	// For 5apps.com and similar servers, client_id must match redirect_uri domain
-	// Always use HTTP for the IPv4 loopback redirect URI.
-	redirectURI := "http://127.0.0.1:8765/"
 	clientID := os.Getenv("RSCLI_CLIENT_ID")
 	if clientID == "" {
 		clientID = redirectURI
@@ -226,14 +232,14 @@ func getOrCreateAuth(ctx context.Context, remote string) (*AuthInfo, error) {
 	if authzURL, tokenURL, ok := rsclient.GetPKCEEndpoints(storageInfo); ok {
 		// Spec §10.1: clients SHOULD use PKCE when it is advertised.
 		fmt.Printf("Using authorization code flow with PKCE (token endpoint: %s)\n", tokenURL)
-		tok, err := pkceLogin(ctx, authzURL, tokenURL, clientID, redirectURI, scope)
+		tok, err := pkceLogin(ctx, listener, authzURL, tokenURL, clientID, redirectURI, scope)
 		if err != nil {
 			return nil, err
 		}
 		token = tok.AccessToken
 		expiresAt = tok.Expiry
 	} else {
-		tok, err := implicitLogin(ctx, storageInfo, clientID, redirectURI, scope)
+		tok, err := implicitLogin(ctx, listener, storageInfo, clientID, redirectURI, scope)
 		if err != nil {
 			return nil, err
 		}
@@ -274,7 +280,7 @@ func openAuthURL(oauthURL string) {
 }
 
 // pkceLogin runs the authorization code flow with PKCE (spec §10.1).
-func pkceLogin(ctx context.Context, authzURL, tokenURL, clientID, redirectURI, scope string) (*oauth2.Token, error) {
+func pkceLogin(ctx context.Context, listener net.Listener, authzURL, tokenURL, clientID, redirectURI, scope string) (*oauth2.Token, error) {
 	scopes, err := rsclient.ParseScope(scope)
 	if err != nil {
 		return nil, err
@@ -288,10 +294,7 @@ func pkceLogin(ctx context.Context, authzURL, tokenURL, clientID, redirectURI, s
 		err  error
 	}
 	resultChan := make(chan result, 1)
-	listener, err := net.Listen("tcp", "127.0.0.1:8765")
-	if err != nil {
-		return nil, fmt.Errorf("start OAuth callback listener: %w", err)
-	}
+	callbackHost := listener.Addr().String()
 
 	server := &http.Server{
 		ReadHeaderTimeout: 5 * time.Second,
@@ -300,7 +303,7 @@ func pkceLogin(ctx context.Context, authzURL, tokenURL, clientID, redirectURI, s
 		IdleTimeout:       30 * time.Second,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			setOAuthCallbackHeaders(w, false)
-			if !isOAuthCallbackHost(r.Host) {
+			if !isOAuthCallbackHost(r.Host, callbackHost) {
 				http.Error(w, "Invalid callback host", http.StatusBadRequest)
 				return
 			}
@@ -368,7 +371,7 @@ func pkceLogin(ctx context.Context, authzURL, tokenURL, clientID, redirectURI, s
 }
 
 // implicitLogin runs the implicit grant flow.
-func implicitLogin(ctx context.Context, storageInfo *rs.StorageInfo, clientID, redirectURI, scope string) (string, error) {
+func implicitLogin(ctx context.Context, listener net.Listener, storageInfo *rs.StorageInfo, clientID, redirectURI, scope string) (string, error) {
 	authURL, err := rsclient.GetAuthURL(storageInfo)
 	if err != nil {
 		return "", fmt.Errorf("no auth endpoint found: %w", err)
@@ -388,16 +391,12 @@ func implicitLogin(ctx context.Context, storageInfo *rs.StorageInfo, clientID, r
 	oauthURL := parsedAuthURL.String()
 
 	resultChan := make(chan implicitCallbackResult, 1)
-	listener, err := net.Listen("tcp", "127.0.0.1:8765")
-	if err != nil {
-		return "", fmt.Errorf("start OAuth callback listener: %w", err)
-	}
 	server := &http.Server{
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       30 * time.Second,
-		Handler:           implicitCallbackHandler(state, resultChan),
+		Handler:           implicitCallbackHandler(state, listener.Addr().String(), resultChan),
 	}
 	go func() {
 		if err := server.Serve(listener); err != http.ErrServerClosed {
@@ -425,8 +424,25 @@ type implicitCallbackResult struct {
 	err   error
 }
 
-func isOAuthCallbackHost(host string) bool {
-	return strings.EqualFold(host, "localhost:8765") || host == "127.0.0.1:8765"
+// callbackListenAddr is the loopback address for the OAuth callback.
+// RSCLI_CALLBACK_PORT pins a port for servers that register a fixed redirect URI.
+func callbackListenAddr() string {
+	if p := os.Getenv("RSCLI_CALLBACK_PORT"); p != "" {
+		return net.JoinHostPort("127.0.0.1", p)
+	}
+	return "127.0.0.1:0"
+}
+
+// isOAuthCallbackHost accepts the listener address, or localhost on the same port.
+func isOAuthCallbackHost(host, listenAddr string) bool {
+	if host == listenAddr {
+		return true
+	}
+	_, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(host, net.JoinHostPort("localhost", port))
 }
 
 func setOAuthCallbackHeaders(w http.ResponseWriter, implicit bool) {
@@ -440,10 +456,10 @@ func setOAuthCallbackHeaders(w http.ResponseWriter, implicit bool) {
 	}
 }
 
-func implicitCallbackHandler(state string, resultChan chan<- implicitCallbackResult) http.Handler {
+func implicitCallbackHandler(state, listenAddr string, resultChan chan<- implicitCallbackResult) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setOAuthCallbackHeaders(w, true)
-		if !isOAuthCallbackHost(r.Host) {
+		if !isOAuthCallbackHost(r.Host, listenAddr) {
 			http.Error(w, "Invalid callback host", http.StatusBadRequest)
 			return
 		}
