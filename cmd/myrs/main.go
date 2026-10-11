@@ -13,9 +13,12 @@ import (
 
 // Config represents the server configuration
 type Config struct {
-	Host        string       `json:"host"`          // e.g., "localhost:8080"
-	MaxFileSize int64        `json:"max_file_size"` // Maximum file size in bytes (0 = no limit)
-	Users       []UserConfig `json:"users"`         // List of users with credentials
+	Host        string `json:"host"`          // e.g., "localhost:8080"
+	MaxFileSize int64  `json:"max_file_size"` // Maximum file size in bytes (0 = no limit)
+	// CacheControl is "default" ("private, no-cache" / "no-cache, public") or
+	// "plain" (exactly "no-cache", for verbatim checkers like spec-check).
+	CacheControl string       `json:"cache_control"`
+	Users        []UserConfig `json:"users"` // List of users with credentials
 }
 
 // UserConfig represents a user in the config file
@@ -32,10 +35,25 @@ type ScopeConfig struct {
 }
 
 func main() {
+	configPath := "config.json"
+	if len(os.Args) > 1 {
+		configPath = os.Args[1]
+	}
+
 	// Load configuration
-	config, err := loadConfig("config.json")
+	config, err := loadConfig(configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	var cacheControl func(*rsserver.ResourceRef) string
+	switch config.CacheControl {
+	case "", "default":
+		cacheControl = rsserver.DefaultCacheControl
+	case "plain":
+		cacheControl = rsserver.PlainCacheControl
+	default:
+		log.Fatalf("Invalid cache_control %q (want default or plain)", config.CacheControl)
 	}
 
 	// Convert config users to OAuth users
@@ -76,6 +94,7 @@ func main() {
 		WithAuthorizer(rsserver.NewScopeCheckingAuthorizer()).
 		WithStorageProvider(NewSimpleStorageProvider()).
 		WithMaxDocumentSize(config.MaxFileSize).
+		WithCacheControl(cacheControl).
 		MustBuild()
 
 	// Setup routes

@@ -107,12 +107,18 @@ func (s *Handler) prepare(w http.ResponseWriter, r *http.Request, isWrite bool) 
 	return authInfo, req, storage, true
 }
 
-func cacheControl(ref *ResourceRef) string {
+// DefaultCacheControl marks public documents "no-cache, public" and everything
+// else "private, no-cache", so shared caches do not store authenticated responses.
+func DefaultCacheControl(ref *ResourceRef) string {
 	if ref.IsPublic && !ref.IsFolder() {
 		return "no-cache, public"
 	}
 	return "private, no-cache"
 }
+
+// PlainCacheControl sends exactly "no-cache", the literal value in the spec.
+// Some conformance suites (e.g. 0dataapp/spec-check) compare the header verbatim.
+func PlainCacheControl(*ResourceRef) string { return "no-cache" }
 
 func (s *Handler) handleRead(w http.ResponseWriter, r *http.Request) {
 	authInfo, req, storage, ok := s.prepare(w, r, false)
@@ -122,7 +128,7 @@ func (s *Handler) handleRead(w http.ResponseWriter, r *http.Request) {
 	ctx := WithAuthInfo(r.Context(), authInfo)
 	ref := req.Resource
 	h := w.Header()
-	h.Set("Cache-Control", cacheControl(ref))
+	h.Set("Cache-Control", s.cacheControl(ref))
 
 	if ref.IsFolder() {
 		s.readFolder(w, r, ctx, storage, req)

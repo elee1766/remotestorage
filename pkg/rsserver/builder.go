@@ -14,6 +14,7 @@ type Builder struct {
 	hooks            ServerHooks
 	maxDocumentSize  int64
 	queryToken       bool
+	cacheControl     func(ref *ResourceRef) string
 	errorLog         func(r *http.Request, err error)
 }
 
@@ -66,6 +67,13 @@ func (b *Builder) WithQueryToken(enabled bool) *Builder {
 	return b
 }
 
+// WithCacheControl sets the Cache-Control value for GET and HEAD responses.
+// Defaults to DefaultCacheControl. The value must include no-cache (spec section 4).
+func (b *Builder) WithCacheControl(f func(ref *ResourceRef) string) *Builder {
+	b.cacheControl = f
+	return b
+}
+
 // WithErrorLog sets the function called for unexpected (500) errors.
 // The default logs with slog.
 func (b *Builder) WithErrorLog(f func(r *http.Request, err error)) *Builder {
@@ -96,8 +104,12 @@ func (b *Builder) Build() (*Handler, error) {
 		hooks:            b.hooks,
 		maxDocumentSize:  b.maxDocumentSize,
 		queryToken:       b.queryToken,
+		cacheControl:     b.cacheControl,
 		errorLog:         b.errorLog,
 		mux:              http.NewServeMux(),
+	}
+	if h.cacheControl == nil {
+		h.cacheControl = DefaultCacheControl
 	}
 	h.registerRoutes()
 	return h, nil

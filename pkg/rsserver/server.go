@@ -24,6 +24,7 @@ type Handler struct {
 	hooks            ServerHooks
 	maxDocumentSize  int64
 	queryToken       bool
+	cacheControl     func(ref *ResourceRef) string
 	errorLog         func(r *http.Request, err error)
 	mux              *http.ServeMux
 }

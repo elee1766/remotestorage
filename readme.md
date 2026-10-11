@@ -22,8 +22,9 @@ bearer auth with scope checks, public documents, folder listings,
 
 private documents and authenticated folder listings use `private, no-cache`.
 public documents remain publicly cacheable and are served with `nosniff` and a
-sandbox CSP. configure transport deadlines, request concurrency and upload
-limits in the host server.
+sandbox CSP. `WithCacheControl(rsserver.PlainCacheControl)` sends exactly
+`no-cache` instead, for checkers that compare the header verbatim. configure
+transport deadlines, request concurrency and upload limits in the host server.
 
 an implementation provides
 
@@ -39,7 +40,11 @@ oauth itself is left to the implementer. to support pkce, advertise the token en
 `pkg/rsserver/rstest` is a black-box HTTP test suite for any remoteStorage
 server. `rstest.Run(t, target)` needs a storage root and a function that
 issues tokens with given scopes. `rstest.NewHarness` wires a `StorageBackend`
-into a test server, see `rstest_test.go`.
+into a test server, see `rstest_test.go`. set `Target.PrivateCaching` to also
+check the `private`/`public` cache directives.
+
+`scripts/spec-check.sh` runs [0dataapp/spec-check](https://github.com/0dataapp/spec-check)
+against `cmd/myrs` with `cache_control: plain`. needs node.
 
 ## client
 

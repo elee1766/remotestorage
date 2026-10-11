@@ -27,6 +27,9 @@ type Target struct {
 	OtherUserRoot string
 	// MaxDocumentSize, if > 0, is the configured upload limit.
 	MaxDocumentSize int64
+	// PrivateCaching checks that authenticated responses are "private" and public
+	// documents "public" (rsserver.DefaultCacheControl). Otherwise only no-cache is required.
+	PrivateCaching bool
 	// Client defaults to http.DefaultClient.
 	Client *http.Client
 }
@@ -268,9 +271,7 @@ func (c *client) testDocuments(t *testing.T) {
 	if got := etag(t, r); got != e1 {
 		t.Fatalf("GET ETag %q, PUT returned %q", got, e1)
 	}
-	if cc := r.Header.Get("Cache-Control"); !strings.Contains(cc, "no-cache") || !strings.Contains(cc, "private") || strings.Contains(cc, "public") {
-		t.Fatalf("Cache-Control %q, want private, no-cache", cc)
-	}
+	c.checkCache(t, r, "document", "private")
 	if lm := r.Header.Get("Last-Modified"); lm != "" {
 		if _, err := http.ParseTime(lm); err != nil {
 			t.Fatalf("Last-Modified %q is not an HTTP-date", lm)
@@ -536,6 +537,23 @@ func escape(name string) string {
 	return b.String()
 }
 
+// checkCache requires no-cache, and with PrivateCaching also the given
+// visibility ("private" or "public") and not the other one.
+func (c *client) checkCache(t *testing.T, r *resp, what, visibility string) {
+	t.Helper()
+	cc := r.Header.Get("Cache-Control")
+	if !strings.Contains(cc, "no-cache") {
+		t.Fatalf("%s Cache-Control %q, want no-cache", what, cc)
+	}
+	if !c.tg.PrivateCaching {
+		return
+	}
+	other := map[string]string{"private": "public", "public": "private"}[visibility]
+	if !strings.Contains(cc, visibility) || strings.Contains(cc, other) {
+		t.Fatalf("%s Cache-Control %q, want no-cache, %s", what, cc, visibility)
+	}
+}
+
 func (c *client) testPublic(t *testing.T) {
 	p := "/public/" + c.mod + "/pub.txt"
 	expect(t, c.put(t, p, "public!", "Content-Type", "text/plain"), 201, "create public")
@@ -544,9 +562,7 @@ func (c *client) testPublic(t *testing.T) {
 	if string(r.body) != "public!" {
 		t.Fatalf("public body %q", r.body)
 	}
-	if cc := r.Header.Get("Cache-Control"); !strings.Contains(cc, "public") || !strings.Contains(cc, "no-cache") {
-		t.Fatalf("public Cache-Control %q, want 'no-cache, public'", cc)
-	}
+	c.checkCache(t, r, "public document", "public")
 	// Public documents are opened directly in browsers; stored HTML must not
 	// run as active content on the storage origin.
 	html := "/public/" + c.mod + "/page.html"
@@ -564,9 +580,7 @@ func (c *client) testPublic(t *testing.T) {
 	expect(t, c.do(t, "GET", c.url("/public/"+c.mod+"/"), "", nil), 401, "public folder without token")
 	folder := c.do(t, "GET", c.url("/public/"+c.mod+"/"), c.tok, nil)
 	expect(t, folder, 200, "authenticated public folder GET")
-	if cc := folder.Header.Get("Cache-Control"); !strings.Contains(cc, "private") || !strings.Contains(cc, "no-cache") || strings.Contains(cc, "public") {
-		t.Fatalf("public folder Cache-Control %q, want private, no-cache", cc)
-	}
+	c.checkCache(t, folder, "public folder", "private")
 	expect(t, c.do(t, "GET", c.url("/public/"+c.mod+"/missing"), "", nil), 404, "public missing document")
 	expect(t, c.do(t, "PUT", c.url(p), "", strings.NewReader("x"), "Content-Type", "text/plain"), 401, "public PUT without token")
 	expect(t, c.do(t, "DELETE", c.url(p), "", nil), 401, "public DELETE without token")

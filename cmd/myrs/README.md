@@ -39,6 +39,8 @@ Create a `config.json` file (see `config.example.json`):
 ### Configuration Fields
 
 - **host**: Server address (e.g., `localhost:8080`)
+- **max_file_size**: Upload limit in bytes (0 = no limit)
+- **cache_control**: `default` (`private, no-cache`, public documents `no-cache, public`) or `plain` (exactly `no-cache`, needed by spec-check)
 - **users**: List of users with credentials and scopes
   - **username**: User identifier
   - **password**: Plain text password (PoC only!)
