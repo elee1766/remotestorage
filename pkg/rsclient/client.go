@@ -13,15 +13,15 @@ import (
 
 // Client is a RemoteStorage client
 type Client struct {
-	HTTPClient  *http.Client
 	StorageRoot string
 	TokenSource oauth2.TokenSource
+
+	httpClient *http.Client
 }
 
 // New creates a new RemoteStorage client
 func New(storageRoot string, tokenSource oauth2.TokenSource) *Client {
 	return &Client{
-		HTTPClient:  http.DefaultClient,
 		StorageRoot: strings.TrimSuffix(storageRoot, "/"),
 		TokenSource: tokenSource,
 	}
@@ -36,72 +36,64 @@ func NewWithToken(storageRoot string, token string) *Client {
 	return New(storageRoot, ts)
 }
 
-// Get retrieves a document or folder listing
-func (c *Client) Get(path string) (*http.Response, error) {
-	req, err := http.NewRequest("GET", c.StorageRoot+path, nil)
+// WithClient sets the HTTP client used for every request. nil means http.DefaultClient.
+func (c *Client) WithClient(hc *http.Client) *Client {
+	c.httpClient = hc
+	return c
+}
+
+// HTTPClient returns the HTTP client used for requests.
+func (c *Client) HTTPClient() *http.Client {
+	if c.httpClient == nil {
+		return http.DefaultClient
+	}
+	return c.httpClient
+}
+
+// do sends one authenticated request. All Client operations go through here.
+func (c *Client) do(method, path string, body io.Reader, header http.Header) (*http.Response, error) {
+	req, err := http.NewRequest(method, c.StorageRoot+path, body)
 	if err != nil {
 		return nil, err
 	}
-
+	for k, v := range header {
+		req.Header[k] = v
+	}
 	if err := c.setAuth(req); err != nil {
 		return nil, err
 	}
+	return c.HTTPClient().Do(req)
+}
 
-	return c.HTTPClient.Do(req)
+// Get retrieves a document or folder listing
+func (c *Client) Get(path string) (*http.Response, error) {
+	return c.do(http.MethodGet, path, nil, nil)
 }
 
 // Put stores a document
 func (c *Client) Put(path string, body io.Reader, contentType string, etag string) (*http.Response, error) {
-	req, err := http.NewRequest("PUT", c.StorageRoot+path, body)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := c.setAuth(req); err != nil {
-		return nil, err
-	}
-
+	h := http.Header{}
 	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
+		h.Set("Content-Type", contentType)
 	}
-
 	if etag != "" {
-		req.Header.Set("If-Match", etag)
+		h.Set("If-Match", etag)
 	}
-
-	return c.HTTPClient.Do(req)
+	return c.do(http.MethodPut, path, body, h)
 }
 
 // Delete removes a document
 func (c *Client) Delete(path string, etag string) (*http.Response, error) {
-	req, err := http.NewRequest("DELETE", c.StorageRoot+path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := c.setAuth(req); err != nil {
-		return nil, err
-	}
-
+	h := http.Header{}
 	if etag != "" {
-		req.Header.Set("If-Match", etag)
+		h.Set("If-Match", etag)
 	}
-
-	return c.HTTPClient.Do(req)
+	return c.do(http.MethodDelete, path, nil, h)
 }
 
 // Head retrieves document metadata
 func (c *Client) Head(path string) (*http.Response, error) {
-	req, err := http.NewRequest("HEAD", c.StorageRoot+path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := c.setAuth(req); err != nil {
-		return nil, err
-	}
-
-	return c.HTTPClient.Do(req)
+	return c.do(http.MethodHead, path, nil, nil)
 }
 
 func (c *Client) setAuth(req *http.Request) error {
