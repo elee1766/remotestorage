@@ -5,20 +5,17 @@ import (
 	"testing"
 
 	"anime.bike/remotestorage/pkg/rsserver"
-	"anime.bike/remotestorage/pkg/rsserver/rsstorage/rsstorage_filesystem"
-	"anime.bike/remotestorage/pkg/rsserver/rsstorage/rsstorage_inmemory"
 	"anime.bike/remotestorage/pkg/rsserver/rstest"
-	"github.com/spf13/afero"
 )
 
-func TestInMemory(t *testing.T) {
+func TestMemoryStorage(t *testing.T) {
 	var mu sync.Mutex
-	users := map[string]*rsstorage_inmemory.Storage{}
+	users := map[string]*rstest.MemoryStorage{}
 	h := rstest.NewHarness(t, func(user string) (rsserver.StorageBackend, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		if users[user] == nil {
-			users[user] = rsstorage_inmemory.New()
+			users[user] = rstest.NewMemoryStorage()
 		}
 		return users[user], nil
 	}, func(b *rsserver.Builder) { b.WithMaxDocumentSize(1 << 16) })
@@ -30,25 +27,11 @@ func TestInMemory(t *testing.T) {
 
 // TestPlainCacheControl runs the suite with the spec-check compatible setting.
 func TestPlainCacheControl(t *testing.T) {
-	store := rsstorage_inmemory.New()
+	store := rstest.NewMemoryStorage()
 	h := rstest.NewHarness(t, func(user string) (rsserver.StorageBackend, error) {
 		return store, nil
 	}, func(b *rsserver.Builder) { b.WithCacheControl(rsserver.PlainCacheControl) })
 	tg := h.Target("alice")
 	tg.OtherUserRoot = ""
 	rstest.Run(t, tg)
-}
-
-func TestFilesystem(t *testing.T) {
-	for name, fsys := range map[string]afero.Fs{"os": afero.NewBasePathFs(afero.NewOsFs(), t.TempDir()), "mem": afero.NewMemMapFs()} {
-		t.Run(name, func(t *testing.T) {
-			multi := rsstorage_filesystem.NewMulti(fsys, "/")
-			h := rstest.NewHarness(t, func(user string) (rsserver.StorageBackend, error) {
-				return multi.User(user)
-			})
-			tg := h.Target("alice")
-			tg.PrivateCaching = true
-			rstest.Run(t, tg)
-		})
-	}
 }

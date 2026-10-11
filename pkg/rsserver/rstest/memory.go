@@ -1,5 +1,4 @@
-// Package rsstorage_inmemory is an in-memory StorageBackend, for tests and examples.
-package rsstorage_inmemory
+package rstest
 
 import (
 	"bytes"
@@ -17,30 +16,31 @@ import (
 	"anime.bike/remotestorage/pkg/rsserver"
 )
 
-type doc struct {
+type memDoc struct {
 	content     []byte
 	contentType string
 	etag        string
 	modified    time.Time
 }
 
-// Storage holds one user's documents in memory.
-type Storage struct {
+// MemoryStorage is an in-memory StorageBackend holding one user's documents.
+// It is meant for tests and examples, not production.
+type MemoryStorage struct {
 	mu   sync.RWMutex
-	docs map[string]*doc // document path -> doc
+	docs map[string]*memDoc // document path -> doc
 	// folders maps each non-empty folder path to its version counter.
 	folders map[string]uint64
 	seq     uint64
 }
 
-// New returns an empty storage.
-func New() *Storage {
-	return &Storage{docs: map[string]*doc{}, folders: map[string]uint64{}}
+// NewMemoryStorage returns an empty storage.
+func NewMemoryStorage() *MemoryStorage {
+	return &MemoryStorage{docs: map[string]*memDoc{}, folders: map[string]uint64{}}
 }
 
-var _ rsserver.StorageBackend = (*Storage)(nil)
+var _ rsserver.StorageBackend = (*MemoryStorage)(nil)
 
-func (s *Storage) folderETag(p string) string {
+func (s *MemoryStorage) folderETag(p string) string {
 	v, ok := s.folders[p]
 	if !ok {
 		return ""
@@ -50,14 +50,14 @@ func (s *Storage) folderETag(p string) string {
 }
 
 // bumpAncestors gives every ancestor folder of p a new version.
-func (s *Storage) bumpAncestors(p string) {
+func (s *MemoryStorage) bumpAncestors(p string) {
 	for dir := rs.ParentPath(p); dir != ""; dir = rs.ParentPath(dir) {
 		s.seq++
 		s.folders[dir] = s.seq
 	}
 }
 
-func (s *Storage) children(dir string) (docs []string, folders []string) {
+func (s *MemoryStorage) children(dir string) (docs []string, folders []string) {
 	seenFolder := map[string]bool{}
 	for p := range s.docs {
 		if !strings.HasPrefix(p, dir) {
@@ -78,7 +78,7 @@ func (s *Storage) children(dir string) (docs []string, folders []string) {
 	return docs, folders
 }
 
-func (s *Storage) meta(p string, d *doc) rs.Metadata {
+func (s *MemoryStorage) meta(p string, d *memDoc) rs.Metadata {
 	return rs.Metadata{
 		Path:         p,
 		Name:         rs.BaseName(p),
@@ -89,7 +89,7 @@ func (s *Storage) meta(p string, d *doc) rs.Metadata {
 	}
 }
 
-func (s *Storage) Get(_ context.Context, p string) (*rs.Document, *rs.FolderListing, error) {
+func (s *MemoryStorage) Get(_ context.Context, p string) (*rs.Document, *rs.FolderListing, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if !rs.IsFolderPath(p) {
@@ -110,7 +110,7 @@ func (s *Storage) Get(_ context.Context, p string) (*rs.Document, *rs.FolderList
 	return nil, listing, nil
 }
 
-func (s *Storage) Head(_ context.Context, p string) (*rs.Metadata, error) {
+func (s *MemoryStorage) Head(_ context.Context, p string) (*rs.Metadata, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if rs.IsFolderPath(p) {
@@ -125,7 +125,7 @@ func (s *Storage) Head(_ context.Context, p string) (*rs.Metadata, error) {
 }
 
 // conflicts reports whether writing a document at p clashes with existing items.
-func (s *Storage) conflicts(p string) bool {
+func (s *MemoryStorage) conflicts(p string) bool {
 	if _, isFolder := s.folders[p+"/"]; isFolder {
 		return true
 	}
@@ -137,7 +137,7 @@ func (s *Storage) conflicts(p string) bool {
 	return false
 }
 
-func (s *Storage) Put(_ context.Context, p string, body io.Reader, _ int64, contentType string, cond rsserver.Condition) (*rsserver.PutResult, error) {
+func (s *MemoryStorage) Put(_ context.Context, p string, body io.Reader, _ int64, contentType string, cond rsserver.Condition) (*rsserver.PutResult, error) {
 	content, err := io.ReadAll(body)
 	if err != nil {
 		return nil, err
@@ -160,12 +160,12 @@ func (s *Storage) Put(_ context.Context, p string, body io.Reader, _ int64, cont
 	h.Write([]byte{0})
 	h.Write(content)
 	etag := hex.EncodeToString(h.Sum(nil))[:32]
-	s.docs[p] = &doc{content: content, contentType: contentType, etag: etag, modified: time.Now().UTC().Truncate(time.Second)}
+	s.docs[p] = &memDoc{content: content, contentType: contentType, etag: etag, modified: time.Now().UTC().Truncate(time.Second)}
 	s.bumpAncestors(p)
 	return &rsserver.PutResult{ETag: etag, Created: !exists}, nil
 }
 
-func (s *Storage) Delete(_ context.Context, p string, cond rsserver.Condition) (string, error) {
+func (s *MemoryStorage) Delete(_ context.Context, p string, cond rsserver.Condition) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	d, exists := s.docs[p]

@@ -1,4 +1,4 @@
-// Package rsstorage_filesystem stores remoteStorage documents in a directory tree.
+// Package filesystem stores remoteStorage documents in a directory tree.
 //
 // Layout under the root directory:
 //
@@ -10,7 +10,7 @@
 // whenever any document in the subtree changes. Computing them walks the
 // subtree, which is fine for small trees. Writes are serialized with a mutex,
 // so one Storage must not be shared between processes.
-package rsstorage_filesystem
+package filesystem
 
 import (
 	"context"

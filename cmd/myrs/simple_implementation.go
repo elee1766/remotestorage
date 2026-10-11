@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"anime.bike/remotestorage/pkg/rsserver"
-	"anime.bike/remotestorage/pkg/rsserver/rsstorage/rsstorage_inmemory"
 	"anime.bike/remotestorage/pkg/rsserver/rstest"
 )
 
@@ -41,12 +40,12 @@ func (s *SimpleAuthenticator) Authenticate(r *http.Request, token string) (*rsse
 // SimpleStorageProvider keeps one in-memory tree per user.
 type SimpleStorageProvider struct {
 	mu    sync.Mutex
-	users map[string]*rsstorage_inmemory.Storage
+	users map[string]*rstest.MemoryStorage
 }
 
 // NewSimpleStorageProvider creates a new storage provider
 func NewSimpleStorageProvider() *SimpleStorageProvider {
-	return &SimpleStorageProvider{users: map[string]*rsstorage_inmemory.Storage{}}
+	return &SimpleStorageProvider{users: map[string]*rstest.MemoryStorage{}}
 }
 
 // GetStorage returns the storage of the user named in the URL. Public reads
@@ -57,7 +56,7 @@ func (s *SimpleStorageProvider) GetStorage(_ context.Context, _ *rsserver.AuthIn
 	user := req.Resource.RequestedUser
 	st, ok := s.users[user]
 	if !ok {
-		st = rsstorage_inmemory.New()
+		st = rstest.NewMemoryStorage()
 		s.users[user] = st
 	}
 	return st, nil

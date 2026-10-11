@@ -13,6 +13,8 @@ some simple examples are in the cmd/ directory. these are used to help test and 
 - `pkg/rsserver` - storage http handler
 - `pkg/rsclient` - client, discovery, oauth helpers
 - `pkg/webfinger` - webfinger server and parsing
+- `pkg/rsserver/rstest` - conformance suite, test harness, in-memory storage for tests
+- `contrib/storage/filesystem` - opinionated directory-tree storage backend, optional
 
 ## server
 
@@ -31,7 +33,7 @@ an implementation provides
 - `ResourceResolver` - map a request to a user and a storage path (`rstest.PathResolver` handles `/{user}/{path}`)
 - `Authenticator` - validate bearer tokens
 - `Authorizer` - `NewScopeCheckingAuthorizer` covers the spec rules
-- `StorageProvider` / `StorageBackend` - the storage. backends must implement the storage model: folders exist only while they contain documents, every write changes the ETags of all ancestor folders, conditions are checked atomically. in-memory and filesystem backends are included
+- `StorageProvider` / `StorageBackend` - the storage. backends must implement the storage model: folders exist only while they contain documents, every write changes the ETags of all ancestor folders, conditions are checked atomically. `rstest.MemoryStorage` is a reference for tests, `contrib/storage/filesystem` is one possible real backend
 
 oauth itself is left to the implementer. to support pkce, advertise the token endpoint via `webfinger.UserStorageInfo.TokenEndpoint`.
 
@@ -40,8 +42,9 @@ oauth itself is left to the implementer. to support pkce, advertise the token en
 `pkg/rsserver/rstest` is a black-box HTTP test suite for any remoteStorage
 server. `rstest.Run(t, target)` needs a storage root and a function that
 issues tokens with given scopes. `rstest.NewHarness` wires a `StorageBackend`
-into a test server, see `rstest_test.go`. set `Target.PrivateCaching` to also
-check the `private`/`public` cache directives.
+into a test server, see `rstest_test.go` or
+`contrib/storage/filesystem/filesystem_test.go`. set `Target.PrivateCaching`
+to also check the `private`/`public` cache directives.
 
 `scripts/spec-check.sh` runs [0dataapp/spec-check](https://github.com/0dataapp/spec-check)
 against `cmd/myrs` with `cache_control: plain`. needs node.
