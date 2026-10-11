@@ -58,9 +58,4 @@ against `cmd/myrs` with `cache_control: plain`. needs node.
 ## examples
 
 - `cmd/myrs` - toy server with static users, implicit and pkce oauth
-- `cmd/rscli` - cli client (ls, get, put, ...), picks pkce when available
-
-the CLI binds its OAuth callback listener to `127.0.0.1:8765` before opening the
-browser and validates state for both flows. implicit callbacks submit the token
-in a bounded POST body rather than a query string. a login waits at most five
-minutes. the authorization server must echo the supplied state.
+- [elee1766/rscli](https://github.com/elee1766/rscli) - cli client (ls, get, put, ...) built on `rsclient`
